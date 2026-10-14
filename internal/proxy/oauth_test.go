@@ -30,6 +30,7 @@ import (
 
 type asOpts struct {
 	NoRegistration bool
+	NoPKCE         bool   // metadata omits code_challenge_methods_supported
 	OIDCOnly       bool   // metadata only at /.well-known/openid-configuration
 	TokenURL       string // overrides the advertised token_endpoint
 	RegisterURL    string // overrides the advertised registration_endpoint
@@ -52,8 +53,9 @@ type fakeAS struct {
 	access       map[string]bool
 	refresh      map[string]bool
 	refreshes    int
-	rejectAll    bool // refresh requests fail with invalid_grant
+	refreshCode  int // when set, refresh requests fail with this status
 	tokenForms   []url.Values
+	tokenAuth    []string // Authorization header of each token request
 }
 
 func newAS(t *testing.T, opts asOpts) *fakeAS {
@@ -75,10 +77,12 @@ func (as *fakeAS) serve(w http.ResponseWriter, r *http.Request) {
 	switch r.URL.Path {
 	case metaPath:
 		meta := map[string]any{
-			"issuer":                           as.URL,
-			"authorization_endpoint":           or(as.opts.AuthorizeURL, as.URL+"/authorize"),
-			"token_endpoint":                   or(as.opts.TokenURL, as.URL+"/token"),
-			"code_challenge_methods_supported": []string{"S256"},
+			"issuer":                 as.URL,
+			"authorization_endpoint": or(as.opts.AuthorizeURL, as.URL+"/authorize"),
+			"token_endpoint":         or(as.opts.TokenURL, as.URL+"/token"),
+		}
+		if !as.opts.NoPKCE {
+			meta["code_challenge_methods_supported"] = []string{"plain", "S256"}
 		}
 		if !as.opts.NoRegistration {
 			meta["registration_endpoint"] = or(as.opts.RegisterURL, as.URL+"/register")
@@ -94,6 +98,7 @@ func (as *fakeAS) serve(w http.ResponseWriter, r *http.Request) {
 	case "/token":
 		r.ParseForm()
 		as.tokenForms = append(as.tokenForms, r.PostForm)
+		as.tokenAuth = append(as.tokenAuth, r.Header.Get("Authorization"))
 		switch r.PostForm.Get("grant_type") {
 		case "authorization_code":
 			code, v := r.PostForm.Get("code"), r.PostForm.Get("code_verifier")
@@ -105,7 +110,12 @@ func (as *fakeAS) serve(w http.ResponseWriter, r *http.Request) {
 			delete(as.codes, code)
 		case "refresh_token":
 			rt := r.PostForm.Get("refresh_token")
-			if as.rejectAll || !as.refresh[rt] {
+			if as.refreshCode != 0 {
+				w.WriteHeader(as.refreshCode)
+				fmt.Fprint(w, `{"error":"server_error"}`)
+				return
+			}
+			if !as.refresh[rt] {
 				tokenError(w)
 				return
 			}
@@ -312,8 +322,95 @@ func TestOAuthNeedsClient(t *testing.T) {
 	if err := e.p.FinishOAuth(ctx, e.userID, e.u, e.as.authorize(t, authURL)); err != nil {
 		t.Fatal(err)
 	}
-	if c := e.creds(t); c["client_id"] != "my-client" || c["client_secret"] != "my-secret" {
+	c := e.creds(t)
+	if c["client_id"] != "my-client" || c["client_secret"] != "my-secret" {
 		t.Fatalf("stored client: %v", c)
+	}
+
+	// A confidential client refreshes the way it exchanged the code: HTTP Basic.
+	c["expiry"] = time.Now().Format(time.RFC3339)
+	e.save(t, c)
+	if _, err := e.call(t); err != nil {
+		t.Fatal(err)
+	}
+	var auths []string
+	var form url.Values
+	e.as.locked(func() { auths, form = e.as.tokenAuth, e.as.tokenForms[len(e.as.tokenForms)-1] })
+	basic := "Basic " + base64.StdEncoding.EncodeToString([]byte("my-client:my-secret"))
+	if len(auths) != 2 || auths[0] != basic || auths[1] != basic {
+		t.Fatalf("token requests authenticated with %q", auths)
+	}
+	if form.Get("grant_type") != "refresh_token" || form.Get("resource") != e.f.URL || form.Get("client_secret") != "" {
+		t.Fatalf("refresh form: %v", form)
+	}
+}
+
+func TestOAuthRefusesServerWithoutPKCE(t *testing.T) {
+	e := newOAuthEnv(t, asOpts{NoPKCE: true}, true)
+	if _, err := e.p.StartOAuth(ctx, e.userID, e.u, "", "", "st"); err == nil || !strings.Contains(err.Error(), "S256") {
+		t.Fatalf("StartOAuth: %v", err)
+	}
+}
+
+func TestOAuthResourceMetadataMustMatch(t *testing.T) {
+	origin := func(mcpURL string) string { return strings.TrimSuffix(mcpURL, "/mcp") }
+	for _, c := range []struct {
+		name     string
+		resource func(string) string
+		ok       bool
+	}{
+		{"the MCP URL", nil, true},
+		{"its origin", origin, true},
+		{"empty", func(string) string { return "" }, false},
+		{"another path", func(u string) string { return origin(u) + "/other" }, false},
+		{"another host", func(string) string { return "https://elsewhere.example/mcp" }, false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			as := newAS(t, asOpts{})
+			f := newFake(t, fakeOpts{Bearer: as.valid, AuthServer: as.URL, Challenge: true, Resource: c.resource})
+			p := newProxy(t, f)
+			user, err := p.Store.UpsertUser(ctx, "a@example.com")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_, err = p.StartOAuth(ctx, user.ID, store.Upstream{ID: "u1", Name: "n", URL: f.URL, Auth: "oauth"}, "", "", "st")
+			if (err == nil) != c.ok {
+				t.Fatalf("StartOAuth: %v", err)
+			}
+		})
+	}
+}
+
+// Starting a new sign-in and abandoning it leaves the working login in place.
+func TestOAuthReconnectKeepsLogin(t *testing.T) {
+	e := newOAuthEnv(t, asOpts{}, true)
+	e.login(t)
+	authURL, err := e.p.StartOAuth(ctx, e.userID, e.u, "", "", "st")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out, err := e.call(t); err != nil || out != "echo {}" {
+		t.Fatalf("call during a reconnect: %q %v", out, err)
+	}
+	if err := e.p.FinishOAuth(ctx, e.userID, e.u, e.as.authorize(t, authURL)); err != nil {
+		t.Fatal(err)
+	}
+	if c := e.creds(t); c["access_token"] == "acc-2" || c["pending"] != "" {
+		t.Fatalf("after reconnect: %v", c)
+	}
+	if _, err := e.p.Creds.Load(ctx, e.userID, CredsSystem(e.u.ID)+"/pending"); !errors.Is(err, tools.ErrNotConnected) {
+		t.Fatalf("pending row left: %v", err)
+	}
+}
+
+func TestOAuthEmptyTokenSendsNoHeader(t *testing.T) {
+	f := newFake(t, fakeOpts{Tools: []fakeTool{{Name: "echo"}}})
+	p := newProxy(t, f)
+	if _, _, err := p.Fetch(ctx, store.Upstream{Name: "n", URL: f.URL, Auth: "oauth"}, tools.Creds{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, auth, _ := f.seen(); auth != "" {
+		t.Fatalf("sent Authorization %q", auth)
 	}
 }
 
@@ -328,7 +425,10 @@ func TestOAuthAuthorizationURL(t *testing.T) {
 	if v.Get("code_challenge_method") != "S256" || v.Get("code_challenge") == "" || v.Get("resource") != e.f.URL || v.Get("state") != "signed.state" || v.Get("response_type") != "code" {
 		t.Fatalf("auth URL %s", authURL)
 	}
-	c := e.creds(t)
+	c, err := e.p.Creds.Load(ctx, e.userID, CredsSystem(e.u.ID)+"/pending")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if c["pending"] != "1" || c["verifier"] == "" || c["token_endpoint"] != e.as.URL+"/token" || c["resource"] != e.f.URL {
 		t.Fatalf("pending credential: %v", c)
 	}
@@ -338,7 +438,12 @@ func TestOAuthAuthorizationURL(t *testing.T) {
 		}
 	}
 	// A sign-in in progress is not a login.
-	if _, err := e.call(t); !errors.Is(err, tools.ErrNotConnected) {
+	if _, err := e.p.Creds.Load(ctx, e.userID, CredsSystem(e.u.ID)); !errors.Is(err, tools.ErrNotConnected) {
+		t.Fatalf("login row during sign-in: %v", err)
+	}
+	ints, _ := e.p.Integrations(ctx, e.userID)
+	_, tl := findTool(t, ints, "notes__echo")
+	if _, err := tl.Run(ctx, c, json.RawMessage(`{}`)); !errors.Is(err, tools.ErrNotConnected) {
 		t.Fatalf("call with a pending credential: %v", err)
 	}
 }
@@ -393,9 +498,23 @@ func TestOAuthRefresh(t *testing.T) {
 		t.Fatalf("after 401: %d %v", e.as.refreshCount(), c)
 	}
 
-	// The authorization server refuses: the user is sent back to /upstreams.
-	e.as.locked(func() { e.as.rejectAll = true })
+	// Refresh is a public client's form with the resource, and an absent refresh token keeps the old one.
+	var form url.Values
+	var auth string
+	e.as.locked(func() { form, auth = e.as.tokenForms[len(e.as.tokenForms)-1], e.as.tokenAuth[len(e.as.tokenAuth)-1] })
+	if form.Get("grant_type") != "refresh_token" || form.Get("resource") != e.f.URL || form.Get("client_id") != "dyn-client" || form.Get("client_secret") != "" || auth != "" {
+		t.Fatalf("refresh request: %v %q", form, auth)
+	}
+
+	// An outage is not a rejected login.
+	e.as.locked(func() { e.as.refreshCode = http.StatusBadGateway })
 	e.as.revoke("acc-4")
+	if _, err := e.call(t); err == nil || errors.Is(err, upstream.ErrUnauthorized) {
+		t.Fatalf("refresh during an outage: %v", err)
+	}
+
+	// The authorization server refuses: the user is sent back to /upstreams.
+	e.as.locked(func() { e.as.refreshCode = http.StatusBadRequest })
 	if _, err := e.call(t); !errors.Is(err, upstream.ErrUnauthorized) {
 		t.Fatalf("rejected refresh: %v", err)
 	}

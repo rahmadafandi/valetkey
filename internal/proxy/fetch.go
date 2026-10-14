@@ -115,7 +115,9 @@ func (p *Proxy) connect(ctx context.Context, u store.Upstream, c tools.Creds) (*
 		if c["pending"] != "" {
 			return nil, nil, fmt.Errorf("%s: %w", u.Name, tools.ErrNotConnected)
 		}
-		at.header, at.value = "Authorization", "Bearer "+c["access_token"]
+		if c["access_token"] != "" {
+			at.header, at.value = "Authorization", "Bearer "+c["access_token"]
+		}
 	}
 	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()

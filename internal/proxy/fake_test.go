@@ -37,6 +37,8 @@ type fakeOpts struct {
 	// Challenge points the 401's WWW-Authenticate at /custom-prm; otherwise the
 	// metadata is only at /.well-known/oauth-protected-resource.
 	Challenge bool
+	// Resource, given the MCP URL, is the metadata's resource value; nil means the MCP URL itself.
+	Resource func(mcpURL string) string
 }
 
 type fake struct {
@@ -69,7 +71,11 @@ func newFake(t *testing.T, opts fakeOpts) *fake {
 			}
 			if r.URL.Path == prmPath {
 				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(map[string]any{"resource": f.URL, "authorization_servers": []string{opts.AuthServer}})
+				resource := f.URL
+				if opts.Resource != nil {
+					resource = opts.Resource(f.URL)
+				}
+				json.NewEncoder(w).Encode(map[string]any{"resource": resource, "authorization_servers": []string{opts.AuthServer}})
 				return
 			}
 		}

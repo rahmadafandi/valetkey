@@ -24,6 +24,10 @@ import (
 // so the user has to supply a client ID and secret.
 var ErrNeedClient = errors.New("this authorization server does not register clients itself: enter a client ID and secret")
 
+// pendingSystem holds a sign-in in progress apart from the working login,
+// so an abandoned reconnect leaves that login in place.
+func pendingSystem(upstreamID string) string { return CredsSystem(upstreamID) + "/pending" }
+
 // refreshMargin is how close to expiry an access token is refreshed before use.
 const refreshMargin = 30 * time.Second
 
@@ -57,10 +61,10 @@ func (p *Proxy) StartOAuth(ctx context.Context, userID string, u store.Upstream,
 	verifier := oauth2.GenerateVerifier()
 	c := tools.Creds{
 		"pending": "1", "verifier": verifier,
-		"client_id": clientID, "client_secret": clientSecret,
+		"client_id": clientID, "client_secret": clientSecret, "token_auth": tokenAuth(clientSecret, as.TokenEndpointAuthMethodsSupported),
 		"token_endpoint": as.TokenEndpoint, "resource": u.URL, "redirect_uri": redirect,
 	}
-	if err := p.Creds.Save(ctx, userID, CredsSystem(u.ID), c); err != nil {
+	if err := p.Creds.Save(ctx, userID, pendingSystem(u.ID), c); err != nil {
 		return "", err
 	}
 	cfg := oauthConfig(c)
@@ -68,10 +72,10 @@ func (p *Proxy) StartOAuth(ctx context.Context, userID string, u store.Upstream,
 	return cfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier), oauth2.SetAuthURLParam("resource", u.URL)), nil
 }
 
-// FinishOAuth exchanges the code from the callback for tokens and replaces the
-// pending credential with them.
+// FinishOAuth exchanges the code from the callback for tokens, stores them as
+// the upstream's login and drops the pending sign-in.
 func (p *Proxy) FinishOAuth(ctx context.Context, userID string, u store.Upstream, code string) error {
-	c, err := p.Creds.Load(ctx, userID, CredsSystem(u.ID))
+	c, err := p.Creds.Load(ctx, userID, pendingSystem(u.ID))
 	if errors.Is(err, tools.ErrNotConnected) || err == nil && c["pending"] != "1" {
 		return fmt.Errorf("%s: no sign-in is in progress", u.Name)
 	}
@@ -84,7 +88,23 @@ func (p *Proxy) FinishOAuth(ctx context.Context, userID string, u store.Upstream
 	if err != nil {
 		return fmt.Errorf("%s: %w", u.Name, err)
 	}
-	return p.Creds.Save(ctx, userID, CredsSystem(u.ID), tokenCreds(c, tok))
+	if err := p.Creds.Save(ctx, userID, CredsSystem(u.ID), tokenCreds(c, tok)); err != nil {
+		return err
+	}
+	return p.Creds.Delete(ctx, userID, pendingSystem(u.ID))
+}
+
+// tokenAuth picks how a client authenticates at the token endpoint: "none" for
+// a public client, else client_secret_basic (the RFC 6749 default) unless the
+// server lists only client_secret_post.
+func tokenAuth(secret string, supported []string) string {
+	switch {
+	case secret == "":
+		return "none"
+	case !slices.Contains(supported, "client_secret_basic") && slices.Contains(supported, "client_secret_post"):
+		return "post"
+	}
+	return "basic"
 }
 
 // discover follows the upstream's protected-resource metadata to its
@@ -102,7 +122,7 @@ func (p *Proxy) discover(ctx context.Context, u store.Upstream) (*oauthex.AuthSe
 	if err := p.firstJSON(ctx, locations, &prm); err != nil {
 		return nil, fmt.Errorf("protected-resource metadata: %w", err)
 	}
-	if prm.Resource != "" && strings.TrimSuffix(prm.Resource, "/") != strings.TrimSuffix(u.URL, "/") {
+	if !resourceMatches(prm.Resource, endpoint) {
 		return nil, fmt.Errorf("protected-resource metadata is for %q, not this server", prm.Resource)
 	}
 	if len(prm.AuthorizationServers) == 0 {
@@ -119,7 +139,7 @@ func (p *Proxy) discover(ctx context.Context, u store.Upstream) (*oauthex.AuthSe
 	if strings.TrimSuffix(as.Issuer, "/") != strings.TrimSuffix(prm.AuthorizationServers[0], "/") {
 		return nil, fmt.Errorf("authorization server metadata names issuer %q, not %q", as.Issuer, prm.AuthorizationServers[0])
 	}
-	if len(as.CodeChallengeMethodsSupported) > 0 && !slices.Contains(as.CodeChallengeMethodsSupported, "S256") {
+	if !slices.Contains(as.CodeChallengeMethodsSupported, "S256") {
 		return nil, errors.New("the authorization server does not support PKCE with S256")
 	}
 	if as.AuthorizationEndpoint == "" || as.TokenEndpoint == "" {
@@ -135,6 +155,19 @@ func (p *Proxy) discover(ctx context.Context, u store.Upstream) (*oauthex.AuthSe
 		}
 	}
 	return &as, nil
+}
+
+// resourceMetadataURL is the metadata's resource value: required (RFC 9728
+// section 3.3) and either the MCP URL itself or its origin, both canonical
+// server URIs in the MCP authorization spec. Scheme, host and a trailing slash
+// are compared loosely.
+func resourceMatches(resource string, endpoint *url.URL) bool {
+	r, err := url.Parse(resource)
+	if resource == "" || err != nil || !sameOrigin(r, endpoint) || r.RawQuery != "" || r.Fragment != "" {
+		return false
+	}
+	path := strings.TrimSuffix(r.Path, "/")
+	return path == "" || path == strings.TrimSuffix(endpoint.Path, "/")
 }
 
 // resourceMetadataURL asks the upstream without credentials and reads
@@ -227,10 +260,9 @@ func (p *Proxy) getJSON(ctx context.Context, loc string, v any) (found bool, err
 }
 
 func oauthConfig(c tools.Creds) *oauth2.Config {
-	// A public client sends its ID in the form; oauth2 would otherwise try HTTP Basic with an empty secret first.
 	style := oauth2.AuthStyleInParams
-	if c["client_secret"] != "" {
-		style = oauth2.AuthStyleAutoDetect
+	if c["token_auth"] == "basic" {
+		style = oauth2.AuthStyleInHeader
 	}
 	return &oauth2.Config{
 		ClientID:     c["client_id"],
@@ -248,7 +280,7 @@ func (p *Proxy) tokenContext(ctx context.Context) (context.Context, context.Canc
 func tokenCreds(c tools.Creds, tok *oauth2.Token) tools.Creds {
 	out := tools.Creds{
 		"access_token": tok.AccessToken, "refresh_token": tok.RefreshToken,
-		"client_id": c["client_id"], "client_secret": c["client_secret"],
+		"client_id": c["client_id"], "client_secret": c["client_secret"], "token_auth": c["token_auth"],
 		"token_endpoint": c["token_endpoint"], "resource": c["resource"],
 	}
 	if !tok.Expiry.IsZero() {
@@ -287,13 +319,7 @@ func (p *Proxy) refresh(ctx context.Context, userID string, u store.Upstream, st
 	if c["refresh_token"] == "" {
 		return nil, fmt.Errorf("%s: the login expired and cannot be refreshed: %w", u.Name, upstream.ErrUnauthorized)
 	}
-	tctx, cancel := p.tokenContext(ctx)
-	defer cancel()
-	tok, err := oauthConfig(c).TokenSource(tctx, &oauth2.Token{RefreshToken: c["refresh_token"]}).Token()
-	var rejected *oauth2.RetrieveError
-	if errors.As(err, &rejected) {
-		return nil, fmt.Errorf("%s: refreshing the login failed: %w", u.Name, upstream.ErrUnauthorized)
-	}
+	tok, err := p.refreshToken(ctx, c)
 	if err != nil {
 		return nil, fmt.Errorf("%s: refreshing the login: %w", u.Name, err)
 	}
@@ -303,4 +329,59 @@ func (p *Proxy) refresh(ctx context.Context, userID string, u store.Upstream, st
 		return nil, err
 	}
 	return next, nil
+}
+
+// refreshToken posts a refresh_token grant with the resource, which oauth2's
+// TokenSource cannot send, authenticating as the code exchange did. A 400 or
+// 401 is a rejected login; anything else is an outage.
+func (p *Proxy) refreshToken(ctx context.Context, c tools.Creds) (*oauth2.Token, error) {
+	form := url.Values{"grant_type": {"refresh_token"}, "refresh_token": {c["refresh_token"]}, "resource": {c["resource"]}}
+	if c["token_auth"] != "basic" {
+		form.Set("client_id", c["client_id"])
+	}
+	if c["token_auth"] == "post" {
+		form.Set("client_secret", c["client_secret"])
+	}
+	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c["token_endpoint"], strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Accept", "application/json")
+	if c["token_auth"] == "basic" {
+		// RFC 6749 section 2.3.1: both halves are form-encoded before Basic encoding.
+		req.SetBasicAuth(url.QueryEscape(c["client_id"]), url.QueryEscape(c["client_secret"]))
+	}
+	resp, err := p.Guard.Client().Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var body struct {
+		AccessToken  string      `json:"access_token"`
+		RefreshToken string      `json:"refresh_token"`
+		ExpiresIn    json.Number `json:"expires_in"`
+		Error        string      `json:"error"`
+	}
+	decodeErr := json.NewDecoder(resp.Body).Decode(&body)
+	switch {
+	case resp.StatusCode == http.StatusBadRequest || resp.StatusCode == http.StatusUnauthorized:
+		return nil, fmt.Errorf("the authorization server refused it (%d %s): %w", resp.StatusCode, body.Error, upstream.ErrUnauthorized)
+	case resp.StatusCode != http.StatusOK:
+		return nil, fmt.Errorf("the token endpoint answered %d", resp.StatusCode)
+	case decodeErr != nil:
+		return nil, decodeErr
+	case body.AccessToken == "":
+		return nil, errors.New("the token response has no access_token")
+	}
+	tok := &oauth2.Token{AccessToken: body.AccessToken, RefreshToken: body.RefreshToken}
+	if tok.RefreshToken == "" {
+		tok.RefreshToken = c["refresh_token"]
+	}
+	if secs, err := body.ExpiresIn.Int64(); err == nil && secs > 0 {
+		tok.Expiry = time.Now().Add(time.Duration(secs) * time.Second)
+	}
+	return tok, nil
 }
