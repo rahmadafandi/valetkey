@@ -174,3 +174,19 @@ func TestAuditRetentionAndDatabaseDefault(t *testing.T) {
 		t.Error("negative retention accepted")
 	}
 }
+
+func TestLoadOIDCIssuerNeedsHTTPS(t *testing.T) {
+	m := valid()
+	for _, bad := range []string{"http://idp.example.com", "http://10.0.0.5:8080", "idp.example.com", "ftp://idp.example.com"} {
+		m["OIDC_ISSUER"] = bad
+		if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "OIDC_ISSUER") {
+			t.Errorf("%q: err = %v", bad, err)
+		}
+	}
+	for _, ok := range []string{"https://idp.example.com", "http://127.0.0.1:5556/dex", "http://localhost:8081", "http://[::1]:9000"} {
+		m["OIDC_ISSUER"] = ok
+		if _, err := Load(env(m)); err != nil {
+			t.Errorf("%q: %v", ok, err)
+		}
+	}
+}

@@ -152,7 +152,7 @@ Names and defaults match [.env.example](.env.example).
 | Variable | Required | Default | Meaning |
 |---|---|---|---|
 | `PUBLIC_URL` | yes | | Public origin of the server, no path and no trailing slash |
-| `OIDC_ISSUER` | yes | | OIDC issuer URL |
+| `OIDC_ISSUER` | yes | | OIDC issuer URL; https is required except on localhost, 127.0.0.1 or ::1 |
 | `OIDC_CLIENT_ID` | yes | | OIDC client ID |
 | `OIDC_CLIENT_SECRET` | yes | | OIDC client secret |
 | `ALLOWED_DOMAINS` | one of the two | | Email domains allowed to sign in, comma-separated |

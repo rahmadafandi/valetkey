@@ -82,6 +82,9 @@ func Load(getenv func(string) string) (Config, error) {
 	if c.PublicURL, err = normalizeOrigin(c.PublicURL); err != nil {
 		return Config{}, fmt.Errorf("PUBLIC_URL: %w", err)
 	}
+	if err := checkIssuer(c.OIDCIssuer); err != nil {
+		return Config{}, fmt.Errorf("OIDC_ISSUER: %w", err)
+	}
 	if c.VaultKey, err = decodeKey(vaultKey); err != nil {
 		return Config{}, err
 	}
@@ -113,6 +116,22 @@ func Load(getenv func(string) string) (Config, error) {
 		}
 	}
 	return c, nil
+}
+
+// checkIssuer requires https except on loopback: the ID token's signature is
+// not checked, which is only safe when it arrives over TLS.
+func checkIssuer(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return err
+	}
+	switch h := u.Hostname(); {
+	case u.Scheme == "https" && h != "":
+		return nil
+	case u.Scheme == "http" && (h == "localhost" || h == "127.0.0.1" || h == "::1"):
+		return nil
+	}
+	return errors.New("must be an https URL (http is allowed only on localhost, 127.0.0.1 or ::1)")
 }
 
 // decodeKey reads a 32-byte key as 64 hex characters (openssl rand -hex 32) or as
