@@ -71,7 +71,7 @@ textarea{min-height:96px;line-height:1.45}
 .writes{display:inline-block;font-size:13px;font-weight:600;color:var(--danger);border:1px solid currentColor;border-radius:6px;padding:0 6px;margin-left:4px}
 .outcome{display:inline-block;padding:1px 8px;border-radius:6px;font-size:13px;font-weight:600;background:var(--sunken);color:var(--text)}
 .outcome.ok{background:var(--ok-bg);color:var(--ok-fg)}
-.outcome.refused,.outcomep.error{background:var(--bad-bg);color:var(--bad-fg)}
+.outcome.refused,.outcome.error{background:var(--bad-bg);color:var(--bad-fg)}
 .outcome.dry_run{background:var(--dry-bg);color:var(--dry-fg);border:1px solid var(--accent-edge)}
 p.error{background:var(--bad-bg);color:var(--bad-fg);border-radius:8px;padding:10px 12px;margin:0 0 12px}
 p.notice{background:var(--ok-bg);color:var(--ok-fg);border-radius:8px;padding:10px 12px;margin:0 0 12px}
@@ -91,7 +91,7 @@ function cur(){return d.dataset.theme||(mq.matches?"dark":"light")}
 document.addEventListener("DOMContentLoaded",function(){
 var b=document.querySelector("[data-theme-toggle]");
 if(b){var label=function(){b.textContent=cur()==="dark"?"Switch to light":"Switch to dark"};
-label();b.hidden=false;mq.addEventListener("change",label);
+label();b.hidden=false;if(mq.addEventListener)mq.addEventListener("change",label);
 b.addEventListener("click",function(){var n=cur()==="dark"?"light":"dark";d.dataset.theme=n;try{localStorage.setItem("valetkey-theme",n)}catch(e){}label()})}});
 document.addEventListener("submit",function(e){var b=e.submitter,f=e.target;
 if(b&&b.dataset.confirm&&!confirm(b.dataset.confirm)){e.preventDefault();return}

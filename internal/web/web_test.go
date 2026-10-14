@@ -337,3 +337,22 @@ func TestEveryPageHasThemeToggle(t *testing.T) {
 		}
 	}
 }
+
+func TestHomeKeepsOneAmberFocus(t *testing.T) {
+	e := newEnv(t)
+	_, body := e.get(t, "/", true)
+	if !strings.Contains(body, `<pre class="key">`+e.url+"/mcp</pre>") || regexp.MustCompile(`class="[^"]*\bprimary\b`).MatchString(body) {
+		t.Error("home should highlight only the MCP address, not the Connect buttons")
+	}
+}
+
+func TestRevokeLabelStaysShort(t *testing.T) {
+	e := newEnv(t)
+	long := strings.Repeat("x", 44)
+	if _, err := e.as.Store.CreatePersonalToken(context.Background(), store.PersonalToken{UserID: e.user.ID, Name: long, Tools: []string{"loki_query"}, Scope: []byte(`{}`)}, []byte("h")); err != nil {
+		t.Fatal(err)
+	}
+	if _, body := e.get(t, "/tokens", true); !strings.Contains(body, `aria-label="Revoke `+long+`">Revoke</button>`) {
+		t.Error("revoke button should show a short label and name the token in aria-label")
+	}
+}

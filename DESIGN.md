@@ -7,8 +7,8 @@ Owner's answers, transcribed. Applies to every page valetkey serves
 
 Every Tool. Your Rules.
 
-Owner's words, used verbatim: the sign-in headline, the README's first line
-under the title, and the page title where a tagline fits.
+Owner's words, used verbatim. It goes as the sign-in headline, as the README's
+first line under the title, and in the page title where a tagline fits.
 
 ## Personality
 

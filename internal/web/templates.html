@@ -41,7 +41,7 @@
 <section class="card" aria-labelledby="client-h">
   <h2 id="client-h">Add valetkey to your AI client</h2>
   <p class="muted">Add this address as a remote MCP server. The first time, your client asks you to sign in here.</p>
-  <pre>{{.MCPURL}}</pre>
+  <pre class="key">{{.MCPURL}}</pre>
   <p><strong>Claude Code</strong>: run</p>
   <pre>claude mcp add --transport http valetkey {{.MCPURL}}</pre>
   <p><strong>Claude Desktop or claude.ai</strong>: open Settings, then Connectors, choose Add custom connector and paste the address.</p>
@@ -57,7 +57,7 @@
   {{range .Systems}}
     <li>
       <span class="what">{{.Title}}: {{if .Connected}}<span class="state on">Connected</span>{{else}}<span class="state">Not connected</span>{{end}}</span>
-      <a class="btn small{{if not .Connected}} primary{{end}}" href="/connect/{{.System}}">{{if .Connected}}Manage {{.Title}}{{else}}Connect {{.Title}}{{end}}</a>
+      <a class="btn small" href="/connect/{{.System}}">{{if .Connected}}Manage {{.Title}}{{else}}Connect {{.Title}}{{end}}</a>
     </li>
   {{else}}
     <li class="muted">No tools are switched on for this server yet. Ask whoever runs valetkey to turn one on.</li>
@@ -132,7 +132,7 @@
       · {{if .LastUsedAt}}last used {{.LastUsedAt.Format "2006-01-02 15:04"}}{{else}}never used{{end}}
       · {{if .ExpiresAt}}expires {{.ExpiresAt.Format "2006-01-02"}}{{else}}no expiry{{end}}
       · {{if .DryRun}}dry run · {{end}}{{if .MaxWritesPerHour}}{{.MaxWritesPerHour}} writes/hour{{else}}no write limit{{end}}</span></span>
-      <form method="post" action="/tokens/{{.ID}}/revoke"><button class="btn small danger" type="submit" data-confirm="Revoke {{.Name}}? Anything using it stops working right away.">Revoke {{.Name}}</button></form>
+      <form method="post" action="/tokens/{{.ID}}/revoke"><button class="btn small danger" type="submit" data-confirm="Revoke {{.Name}}? Anything using it stops working right away." aria-label="Revoke {{.Name}}">Revoke</button></form>
     </li>
   {{else}}
     <li class="muted">No tokens yet. Create one below when a bot needs to reach valetkey.</li>
