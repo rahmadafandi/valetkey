@@ -62,6 +62,7 @@ type Web struct {
 	Auth         *auth.Server
 	Creds        creds.Store
 	Integrations []tools.Integration
+	UserTools    tools.UserIntegrations // the user's own MCP servers' approved tools; may be nil
 	Catalog      []CatalogEntry
 	AdminEmails  []string
 	PublicURL    string
@@ -205,14 +206,26 @@ type toolRow struct {
 
 var expiries = map[string]time.Duration{"7": 7 * 24 * time.Hour, "30": 30 * 24 * time.Hour, "90": 90 * 24 * time.Hour, "0": 0}
 
-func (h *Web) toolRows(checked []string) []toolRow {
-	var rows []toolRow
-	for _, in := range h.Integrations {
-		for _, t := range in.Tools() {
-			rows = append(rows, toolRow{t.Name, t.Description, t.Destructive, slices.Contains(checked, t.Name)})
+// toolRows lists the tools a token may be given: the server's own, then the
+// approved tools of the user's own MCP servers.
+func (h *Web) toolRows(ctx context.Context, u store.User, checked []string) (native, proxied []toolRow, err error) {
+	rows := func(ints []tools.Integration) []toolRow {
+		var out []toolRow
+		for _, in := range ints {
+			for _, t := range in.Tools() {
+				out = append(out, toolRow{t.Name, t.Description, t.Destructive, slices.Contains(checked, t.Name)})
+			}
 		}
+		return out
 	}
-	return rows
+	if h.UserTools != nil {
+		ints, err := h.UserTools(ctx, u.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		proxied = rows(ints)
+	}
+	return rows(h.Integrations), proxied, nil
 }
 
 func (h *Web) tokens(w http.ResponseWriter, r *http.Request) {
@@ -233,7 +246,12 @@ func (h *Web) renderTokens(w http.ResponseWriter, r *http.Request, u store.User,
 		return
 	}
 	checked, _ := form["Tools"].([]string)
-	form["Tokens"], form["ToolRows"], form["Email"] = list, h.toolRows(checked), u.Email
+	native, proxied, err := h.toolRows(r.Context(), u, checked)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	form["Tokens"], form["ToolRows"], form["ProxiedRows"], form["Email"] = list, native, proxied, u.Email
 	if form["Expiry"] == nil {
 		form["Expiry"] = "30"
 	}
@@ -268,8 +286,13 @@ func (h *Web) createToken(w http.ResponseWriter, r *http.Request) {
 		}
 		maxWrites = n
 	}
+	native, proxied, err := h.toolRows(r.Context(), u, nil)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
 	known := map[string]bool{}
-	for _, t := range h.toolRows(nil) {
+	for _, t := range append(native, proxied...) {
 		known[t.Name] = true
 	}
 	for _, t := range picked {

@@ -376,3 +376,66 @@ func TestTimesAreLabelledUTC(t *testing.T) {
 		t.Error("token times are not labelled UTC")
 	}
 }
+
+// proxiedInt stands in for one of a user's own MCP servers.
+type proxiedInt struct{ name string }
+
+func (p proxiedInt) System() string                            { return "upstream:" + p.name }
+func (p proxiedInt) Title() string                             { return p.name }
+func (proxiedInt) Fields() []tools.Field                       { return nil }
+func (proxiedInt) Validate(context.Context, tools.Creds) error { return nil }
+func (p proxiedInt) Tools() []tools.Tool {
+	return []tools.Tool{{Name: p.name + "__echo", Description: "echo", Unscoped: true},
+		{Name: p.name + "__write", Description: "write", Destructive: true, Unscoped: true}}
+}
+
+func TestTokenFormListsTheUsersOwnMCPTools(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	const sentence = "valetkey limits which of these tools a token may call, not what they touch."
+	if _, body := e.get(t, "/tokens", true); strings.Contains(body, "From your MCP servers") {
+		t.Error("the group shows for a user without MCP servers")
+	}
+	e.web.UserTools = func(_ context.Context, userID string) ([]tools.Integration, error) {
+		if userID == e.user.ID {
+			return []tools.Integration{proxiedInt{"github"}}, nil
+		}
+		return []tools.Integration{proxiedInt{"other"}}, nil
+	}
+	code, body := e.get(t, "/tokens", true)
+	for _, want := range []string{"<legend>From your MCP servers</legend>", sentence, `value="github__echo"`, `value="loki_query"`,
+		`<code>github__write</code> <span class="writes">changes things</span>`} {
+		if code != 200 || !strings.Contains(body, want) {
+			t.Errorf("tokens page misses %q (status %d)", want, code)
+		}
+	}
+	if strings.Contains(body, "other__echo") {
+		t.Error("another user's MCP tool is listed")
+	}
+	if i, j := strings.Index(body, `value="loki_query"`), strings.Index(body, `value="github__echo"`); i > j {
+		t.Error("the user's MCP tools should follow the native tools")
+	}
+
+	code, body = e.post(t, "/tokens", url.Values{"name": {"bot"}, "tools": {"github__echo", "loki_query"}, "expiry": {"7"}}, e.url)
+	m := regexp.MustCompile(`<pre class="key">(vk_[A-Z0-9]+)</pre>`).FindStringSubmatch(body)
+	if code != 200 || m == nil {
+		t.Fatalf("create with a proxied tool: %d", code)
+	}
+	if ti, err := e.as.Verify(ctx, m[1], nil); err != nil || !tools.RestrictionOf(ti).Allows("github__echo") {
+		t.Errorf("created token: %v", err)
+	}
+	if code, body := e.post(t, "/tokens", url.Values{"name": {"x"}, "tools": {"other__echo"}, "expiry": {"7"}}, e.url); code != 400 || !strings.Contains(body, "Unknown tool other__echo.") {
+		t.Errorf("another user's tool: %d", code)
+	}
+	if code, body := e.post(t, "/tokens", url.Values{"name": {"x"}, "tools": {"github__echo"}, "expiry": {"7"}, "max_writes": {"-1"}}, e.url); code != 400 || !strings.Contains(body, `value="github__echo" checked`) {
+		t.Errorf("a rejected form should keep the proxied tool ticked: %d", code)
+	}
+}
+
+func TestTokenFormFailsCleanlyWhenMCPLookupFails(t *testing.T) {
+	e := newEnv(t)
+	e.web.UserTools = func(context.Context, string) ([]tools.Integration, error) { return nil, errors.New("db down") }
+	if code, _ := e.get(t, "/tokens", true); code != http.StatusInternalServerError {
+		t.Errorf("status %d", code)
+	}
+}

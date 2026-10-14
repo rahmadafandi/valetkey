@@ -153,6 +153,16 @@
         <span><code>{{.Name}}</code>{{if .Destructive}} <span class="writes">changes things</span>{{end}}</span></label>
       {{end}}
     </fieldset>
+    {{if .ProxiedRows}}
+    <fieldset aria-describedby="proxied-hint">
+      <legend>From your MCP servers</legend>
+      <p class="hint" id="proxied-hint">valetkey limits which of these tools a token may call, not what they touch. The scope below does not apply to them.</p>
+      {{range .ProxiedRows}}
+      <label class="check"><input type="checkbox" name="tools" value="{{.Name}}" {{if .Checked}}checked{{end}}>
+        <span><code>{{.Name}}</code>{{if .Destructive}} <span class="writes">changes things</span>{{end}}</span></label>
+      {{end}}
+    </fieldset>
+    {{end}}
     <label for="max_writes">Write limit per hour</label>
     <p class="hint" id="max-hint">How many calls that change things it may make in an hour. 0 means no limit.</p>
     <input id="max_writes" name="max_writes" type="number" min="0" max="1000" value="{{if .MaxWrites}}{{.MaxWrites}}{{else}}20{{end}}" aria-describedby="max-hint">
