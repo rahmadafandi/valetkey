@@ -114,6 +114,7 @@ func init() {
 			{(*personalToken0001)(nil), "personal_tokens_user_idx", []string{"user_id"}},
 			{(*toolCall0001)(nil), "tool_calls_user_at_idx", []string{"user_id", "at"}},
 			{(*toolCall0001)(nil), "tool_calls_token_at_idx", []string{"token_id", "at"}},
+			{(*toolCall0001)(nil), "tool_calls_at_idx", []string{"at"}},
 		} {
 			if _, err := db.NewCreateIndex().Model(ix.model).Index(ix.name).Column(ix.columns...).Exec(ctx); err != nil {
 				return err

@@ -88,3 +88,19 @@ func TestFailedMigrationLeavesNothingApplied(t *testing.T) {
 		t.Errorf("retry did not create the table: %v", err)
 	}
 }
+
+func TestInitCreatesToolCallsAtIndex(t *testing.T) {
+	ctx := context.Background()
+	db := testDB(t)
+	if err := Up(ctx, db); err != nil {
+		t.Fatal(err)
+	}
+	q := "SELECT count(*) FROM sqlite_master WHERE type = 'index' AND name = ?"
+	if db.Dialect().Name().String() == "pg" {
+		q = "SELECT count(*) FROM pg_indexes WHERE schemaname = current_schema() AND indexname = ?"
+	}
+	var n int
+	if err := db.QueryRowContext(ctx, q, "tool_calls_at_idx").Scan(&n); err != nil || n != 1 {
+		t.Errorf("tool_calls_at_idx: count %d, err %v", n, err)
+	}
+}
