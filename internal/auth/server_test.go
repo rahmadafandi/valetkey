@@ -18,7 +18,10 @@ import (
 
 	"golang.org/x/oauth2"
 
+	"github.com/rahmadafandi/valetkey/internal/integrations/bitbucket"
+	"github.com/rahmadafandi/valetkey/internal/integrations/jenkins"
 	"github.com/rahmadafandi/valetkey/internal/store"
+	"github.com/rahmadafandi/valetkey/internal/tools"
 )
 
 const verifier = "verifier-0123456789-0123456789-0123456789-0123"
@@ -37,6 +40,10 @@ func newEnv(t *testing.T, claims map[string]any) *env {
 	idp := fakeIdP(t, func(string) map[string]any { return claims }, "")
 	ts := httptest.NewUnstartedServer(nil)
 	pub := "http://" + ts.Listener.Addr().String()
+	j, err := jenkins.New("https://jenkins.example.com", false)
+	if err != nil {
+		t.Fatal(err)
+	}
 	as := &Server{
 		Store:  store.OpenTest(t),
 		Signer: NewSigner([]byte(strings.Repeat("k", 32))),
@@ -45,6 +52,7 @@ func newEnv(t *testing.T, claims map[string]any) *env {
 				Endpoint: oauth2.Endpoint{AuthURL: idp.URL + "/auth", TokenURL: idp.URL + "/token"}, Scopes: []string{"openid", "email"}}},
 		PublicURL: pub,
 		AccessTTL: time.Hour, RefreshTTL: 720 * time.Hour, Log: slog.New(slog.DiscardHandler),
+		Integrations: []tools.Integration{j, bitbucket.New("https://bitbucket.example.com", false)},
 	}
 	mux := http.NewServeMux()
 	as.Routes(mux)

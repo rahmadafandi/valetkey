@@ -3,6 +3,7 @@ package web
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
@@ -34,6 +35,9 @@ func (fakeInt) Validate(_ context.Context, c tools.Creds) error {
 	}
 	return nil
 }
+func (fakeInt) ScopeKey() string                              { return "fake" }
+func (fakeInt) ParseScope(raw json.RawMessage) (any, error)   { return tools.StringOrList(raw) }
+func (fakeInt) CheckScope(any, string, json.RawMessage) error { return nil }
 func (fakeInt) Tools() []tools.Tool {
 	return []tools.Tool{{Name: "loki_query", Description: "read logs"}, {Name: "jenkins_deploy", Description: "deploy", Destructive: true}}
 }
@@ -52,7 +56,8 @@ func newEnv(t *testing.T) *env {
 	cr := creds.Store{DB: st, Vault: v, Log: slog.New(slog.DiscardHandler)}
 	ts := httptest.NewUnstartedServer(nil)
 	pub := "http://" + ts.Listener.Addr().String()
-	as := &auth.Server{Store: st, Signer: auth.NewSigner([]byte(strings.Repeat("k", 32))), PublicURL: pub}
+	as := &auth.Server{Store: st, Signer: auth.NewSigner([]byte(strings.Repeat("k", 32))), PublicURL: pub,
+		Integrations: []tools.Integration{fakeInt{}}}
 	h := &Web{Auth: as, Creds: cr, Integrations: []tools.Integration{fakeInt{}},
 		Catalog:   []CatalogEntry{{Name: "Example MCP", Description: "Inbox tools", Setup: "npx example-mcp"}},
 		PublicURL: pub, Log: slog.New(slog.DiscardHandler)}
@@ -174,7 +179,7 @@ func TestTokens(t *testing.T) {
 	if code, body := e.get(t, "/tokens", true); code != 200 || !strings.Contains(body, "No tokens yet.") || !strings.Contains(body, `value="jenkins_deploy"`) {
 		t.Errorf("empty page: %d", code)
 	}
-	good := url.Values{"name": {"atlas"}, "tools": {"loki_query", "jenkins_deploy"}, "scope": {`{"jenkins":"deploy-web"}`}, "expiry": {"30"}}
+	good := url.Values{"name": {"atlas"}, "tools": {"loki_query", "jenkins_deploy"}, "scope": {`{"fake":"x"}`}, "expiry": {"30"}}
 	if code, _ := e.post(t, "/tokens", good, "https://evil.example"); code != http.StatusForbidden {
 		t.Errorf("foreign Origin: %d", code)
 	}
@@ -198,7 +203,7 @@ func TestTokens(t *testing.T) {
 		t.Fatalf("create: %d\n%s", code, body)
 	}
 	ti, err := e.as.Verify(ctx, m[1], nil)
-	if r := tools.RestrictionOf(ti); err != nil || r == nil || !r.Allows("jenkins_deploy") || r.Scope.Jenkins[0] != "deploy-web" {
+	if r := tools.RestrictionOf(ti); err != nil || r == nil || !r.Allows("jenkins_deploy") || r.Scope["fake"].([]string)[0] != "x" {
 		t.Fatalf("created token: %+v %v", r, err)
 	}
 	if _, body := e.get(t, "/tokens", true); !strings.Contains(body, "atlas") || strings.Contains(body, m[1]) {

@@ -22,6 +22,7 @@ import (
 	"golang.org/x/oauth2"
 
 	"github.com/rahmadafandi/valetkey/internal/store"
+	"github.com/rahmadafandi/valetkey/internal/tools"
 )
 
 type Server struct {
@@ -32,6 +33,9 @@ type Server struct {
 	AccessTTL  time.Duration
 	RefreshTTL time.Duration
 	Log        *slog.Logger
+	// Integrations are the enabled upstreams; a personal access token's scope
+	// is read against them.
+	Integrations []tools.Integration
 }
 
 const (

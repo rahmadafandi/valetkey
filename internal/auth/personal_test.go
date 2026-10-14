@@ -26,7 +26,7 @@ func TestPersonalToken(t *testing.T) {
 		t.Fatalf("verify: %+v %v", ti, err)
 	}
 	r := tools.RestrictionOf(ti)
-	if r == nil || r.Name != "atlas" || !r.Allows("jenkins_deploy") || r.Allows("jenkins_rebuild") || r.Scope.Bitbucket != "acme/web" {
+	if r == nil || r.Name != "atlas" || !r.Allows("jenkins_deploy") || r.Allows("jenkins_rebuild") || r.Scope["bitbucket"] != "acme/web" {
 		t.Fatalf("restriction: %+v", r)
 	}
 

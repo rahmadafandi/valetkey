@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,10 +20,25 @@ import (
 
 type fake struct{}
 
-func (fake) System() string                        { return "fake" }
-func (fake) Title() string                         { return "Fake" }
-func (fake) Fields() []Field                       { return []Field{{Name: "token", Label: "Token", Secret: true}} }
-func (fake) Validate(context.Context, Creds) error { return nil }
+func (fake) System() string                              { return "fake" }
+func (fake) Title() string                               { return "Fake" }
+func (fake) Fields() []Field                             { return []Field{{Name: "token", Label: "Token", Secret: true}} }
+func (fake) Validate(context.Context, Creds) error       { return nil }
+func (fake) ScopeKey() string                            { return "fake" }
+func (fake) ParseScope(raw json.RawMessage) (any, error) { return StringOrList(raw) }
+
+// CheckScope fences bitbucket_fake by its repo argument and lets the other tools through.
+func (fake) CheckScope(scope any, tool string, args json.RawMessage) error {
+	if tool != "bitbucket_fake" {
+		return nil
+	}
+	var a struct{ Repo string }
+	json.Unmarshal(args, &a)
+	if !slices.Contains(scope.([]string), a.Repo) {
+		return Refuse("%s: repository %q is outside this token's scope", tool, a.Repo)
+	}
+	return nil
+}
 func (fake) Tools() []Tool {
 	return []Tool{
 		{Name: "fake_echo", Description: "echo", Schema: Object(map[string]any{"msg": Str("message")}),
@@ -74,7 +90,7 @@ func serve(t *testing.T) string {
 		if tok == "pat" {
 			return &mcpauth.TokenInfo{UserID: "u1", Expiration: time.Now().Add(time.Hour), Extra: map[string]any{
 				"email":        "u1@example.com",
-				RestrictionKey: &Restriction{Name: "atlas", Tools: []string{"fake_echo", "bitbucket_fake"}, Scope: Scope{Bitbucket: "acme/web"}},
+				RestrictionKey: &Restriction{Name: "atlas", Tools: []string{"fake_echo", "bitbucket_fake"}, Scope: Scope{"fake": []string{"acme/web"}}},
 			}}, nil
 		}
 		if id, ok := users[tok]; ok {

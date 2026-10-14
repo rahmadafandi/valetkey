@@ -126,6 +126,7 @@ func buildHandler(cfg config.Config, st *store.Store, idp oauth2.Endpoint, log *
 				RedirectURL: cfg.PublicURL + "/oauth/oidc/callback", Scopes: []string{"openid", "email"}}},
 		PublicURL: cfg.PublicURL,
 		AccessTTL: cfg.AccessTTL, RefreshTTL: cfg.RefreshTTL, Log: log,
+		Integrations: ints,
 	}
 	mux := http.NewServeMux()
 	as.Routes(mux)

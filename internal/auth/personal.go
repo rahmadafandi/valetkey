@@ -27,7 +27,7 @@ func (s *Server) CreatePersonalToken(ctx context.Context, userID, name string, t
 	if len(toolNames) == 0 {
 		return "", errors.New("pick at least one tool")
 	}
-	if _, err := tools.ParseScope(scope); err != nil {
+	if _, err := tools.ParseScope(s.Integrations, scope); err != nil {
 		return "", err
 	}
 	if len(strings.TrimSpace(string(scope))) == 0 {
@@ -53,7 +53,7 @@ func (s *Server) verifyPersonal(ctx context.Context, token string) (*mcpauth.Tok
 	if err != nil {
 		return nil, err
 	}
-	scope, err := tools.ParseScope(p.Scope)
+	scope, err := tools.ParseScope(s.Integrations, p.Scope)
 	if err != nil {
 		return nil, fmt.Errorf("personal token %s: %w", p.ID, err)
 	}

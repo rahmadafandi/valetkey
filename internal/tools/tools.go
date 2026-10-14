@@ -104,9 +104,9 @@ func handler(in Integration, t Tool, load LoadCreds, publicURL string, log *slog
 		var err error
 		switch {
 		case r != nil && !r.Allows(t.Name):
-			err = fmt.Errorf("refused: %s is not allowed for this token", t.Name)
+			err = Refuse("%s is not allowed for this token", t.Name)
 		case r != nil:
-			if err = r.Scope.Check(t.Name, req.Params.Arguments); err == nil {
+			if err = r.Scope.Check(in, t.Name, req.Params.Arguments); err == nil {
 				out, err = run(ctx, in, t, load, userID, req.Params.Arguments, log)
 			}
 		default:
