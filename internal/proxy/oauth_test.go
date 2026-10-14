@@ -547,7 +547,7 @@ func TestOAuthRefresh(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if text := res.Content[0].(*mcp.TextContent).Text; !res.IsError || !strings.HasSuffix(text, "Reconnect at https://valet.test/upstreams") {
+	if text := res.Content[0].(*mcp.TextContent).Text; !res.IsError || text != "notes rejected your login. Reconnect at https://valet.test/upstreams" {
 		t.Fatalf("handler said %q", text)
 	}
 }

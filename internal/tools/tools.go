@@ -167,12 +167,15 @@ func handler(in Integration, t Tool, load LoadCreds, publicURL string, log *slog
 			out, err = run(ctx, in, t, load, userID, req.Params.Arguments, log)
 		}
 		connectURL := publicURL + "/connect/" + in.System()
-		if c, ok := in.(Connector); ok {
-			connectURL = c.ConnectURL(publicURL)
+		conn, connector := in.(Connector)
+		if connector {
+			connectURL = conn.ConnectURL(publicURL)
 		}
 		switch {
 		case errors.Is(err, ErrNotConnected):
 			out = fmt.Sprintf("%s is not connected. Connect it at %s", in.Title(), connectURL)
+		case errors.Is(err, upstream.ErrUnauthorized) && connector:
+			out = fmt.Sprintf("%s rejected your login. Reconnect at %s", in.Title(), connectURL)
 		case errors.Is(err, upstream.ErrUnauthorized):
 			out = fmt.Sprintf("%s rejected your credentials (%v). Reconnect at %s", in.Title(), err, connectURL)
 		case err != nil:

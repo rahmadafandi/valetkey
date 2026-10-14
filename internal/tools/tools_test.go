@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -538,6 +539,23 @@ func TestConnectorURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	if text := res.Content[0].(*mcp.TextContent).Text; text != "Fake is not connected. Connect it at https://center.test/upstreams" {
+		t.Errorf("got %q", text)
+	}
+
+	// A rejected login names no detail of the failure, only where to sign in again.
+	tl.Run = func(context.Context, Creds, json.RawMessage) (string, error) {
+		return "", fmt.Errorf("fake: %w", upstream.ErrUnauthorized)
+	}
+	load = func(context.Context, string, string) (Creds, error) { return Creds{}, nil }
+	h = handler(elsewhere{}, tl, load, "https://center.test", slog.New(slog.DiscardHandler), nil)
+	res, err = h(context.Background(), &mcp.CallToolRequest{
+		Params: &mcp.CallToolParamsRaw{Name: tl.Name},
+		Extra:  &mcp.RequestExtra{TokenInfo: &mcpauth.TokenInfo{UserID: "u1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := res.Content[0].(*mcp.TextContent).Text; text != "Fake rejected your login. Reconnect at https://center.test/upstreams" {
 		t.Errorf("got %q", text)
 	}
 }
