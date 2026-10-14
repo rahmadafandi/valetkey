@@ -17,6 +17,7 @@ import (
 
 	"github.com/rahmadafandi/valetkey/internal/store"
 	"github.com/rahmadafandi/valetkey/internal/upstream"
+	"github.com/rahmadafandi/valetkey/internal/version"
 )
 
 // Creds are one user's decrypted credentials for one system, keyed by Field.Name.
@@ -82,7 +83,7 @@ func RestrictionOf(ti *mcpauth.TokenInfo) *Restriction {
 
 // NewServer registers every integration's tools, or only those r allows when r is not nil.
 func NewServer(ints []Integration, load LoadCreds, publicURL string, log *slog.Logger, audit Audit, r *Restriction) *mcp.Server {
-	srv := mcp.NewServer(&mcp.Implementation{Name: "valetkey", Version: "0.1.0"}, nil)
+	srv := mcp.NewServer(&mcp.Implementation{Name: "valetkey", Version: version.String()}, nil)
 	for _, in := range ints {
 		for _, t := range in.Tools() {
 			if r == nil || r.Allows(t.Name) {

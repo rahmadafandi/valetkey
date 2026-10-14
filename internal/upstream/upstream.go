@@ -9,6 +9,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/rahmadafandi/valetkey/internal/version"
 )
 
 // ErrUnauthorized marks an upstream 401/403: the user's stored credentials were rejected.
@@ -17,11 +19,11 @@ var ErrUnauthorized = errors.New("upstream rejected the credentials")
 // Client returns an HTTP client for one upstream. Timeouts come from the request context.
 func Client(insecure bool) *http.Client {
 	if !insecure {
-		return &http.Client{}
+		return &http.Client{Transport: version.Transport(nil)}
 	}
 	t := http.DefaultTransport.(*http.Transport).Clone()
 	t.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
-	return &http.Client{Transport: t}
+	return &http.Client{Transport: version.Transport(t)}
 }
 
 // Origin is the scheme and host of raw, e.g. the Grafana behind a datasource proxy URL.

@@ -30,5 +30,6 @@ jobs:
         with:
           push: true
           platforms: linux/amd64,linux/arm64
+          build-args: VERSION=${{ github.ref_name }}
           tags: ${{ steps.tags.outputs.list }}
           labels: org.opencontainers.image.source=https://github.com/${{ github.repository }}

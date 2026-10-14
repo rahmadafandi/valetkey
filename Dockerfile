@@ -1,10 +1,11 @@
 FROM --platform=$BUILDPLATFORM golang:1.26 AS build
 ARG TARGETOS TARGETARCH
+ARG VERSION=dev
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /valetkey ./cmd/valetkey
+RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X github.com/rahmadafandi/valetkey/internal/version.Version=${VERSION}" -o /valetkey ./cmd/valetkey
 
 # alpine rather than distroless so the HEALTHCHECK can use wget.
 FROM alpine:3.20

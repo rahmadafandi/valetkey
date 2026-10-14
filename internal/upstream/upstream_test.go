@@ -3,9 +3,12 @@ package upstream
 import (
 	"errors"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/rahmadafandi/valetkey/internal/version"
 )
 
 func TestStatusErr(t *testing.T) {
@@ -60,5 +63,20 @@ func TestParseTimeUsesLocal(t *testing.T) {
 	}
 	if _, ok := ParseTime(""); ok {
 		t.Error("empty parsed")
+	}
+}
+
+func TestClientSendsUserAgent(t *testing.T) {
+	var got string
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { got = r.UserAgent() }))
+	defer ts.Close()
+	for _, insecure := range []bool{false, true} {
+		got = ""
+		if _, err := Client(insecure).Get(ts.URL); err != nil {
+			t.Fatal(err)
+		}
+		if got != version.UserAgent() {
+			t.Fatalf("insecure=%v: server saw %q", insecure, got)
+		}
 	}
 }

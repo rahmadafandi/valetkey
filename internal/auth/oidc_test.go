@@ -7,17 +7,23 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/rahmadafandi/valetkey/internal/version"
 	"golang.org/x/oauth2"
 )
+
+// idpAgents records the User-Agent of each request fakeIdP receives, by server URL + path.
+var idpAgents sync.Map
 
 // fakeIdP serves OIDC discovery and a token endpoint whose ID token carries
 // claims(issuer). discoveredIssuer overrides the issuer in discovery when set.
 func fakeIdP(t *testing.T, claims func(iss string) map[string]any, discoveredIssuer string) *httptest.Server {
 	var ts *httptest.Server
 	ts = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		idpAgents.Store(ts.URL+r.URL.Path, r.UserAgent())
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/.well-known/openid-configuration":
@@ -137,5 +143,20 @@ func TestDiscoverTimesOut(t *testing.T) {
 	}
 	if d := time.Since(start); d > 5*time.Second {
 		t.Errorf("Discover took %s", d)
+	}
+}
+
+func TestOIDCRequestsSendUserAgent(t *testing.T) {
+	ts := fakeIdP(t, idClaims("a@example.com", nil), "")
+	if _, err := Discover(context.Background(), ts.URL); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := oidcFor(t, ts, ts.URL).Email(context.Background(), "code"); err != nil {
+		t.Fatal(err)
+	}
+	for _, path := range []string{"/.well-known/openid-configuration", "/token"} {
+		if got, _ := idpAgents.Load(ts.URL + path); got != version.UserAgent() {
+			t.Errorf("%s: server saw %q", path, got)
+		}
 	}
 }

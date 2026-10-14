@@ -12,13 +12,14 @@ import (
 	"strings"
 	"time"
 
+	"github.com/rahmadafandi/valetkey/internal/version"
 	"golang.org/x/oauth2"
 )
 
 const googleIssuer = "https://accounts.google.com"
 
 // discoveryClient bounds discovery, which runs at startup before the server listens.
-var discoveryClient = &http.Client{Timeout: 15 * time.Second}
+var discoveryClient = &http.Client{Timeout: 15 * time.Second, Transport: version.Transport(nil)}
 
 // OIDC signs people in with any OpenID Connect provider and decides who may enter.
 type OIDC struct {
@@ -66,7 +67,7 @@ func Discover(ctx context.Context, issuer string) (oauth2.Endpoint, error) {
 // The ID token comes straight from the token endpoint over TLS, so per OIDC
 // Core 3.1.3.7 its signature check may be skipped.
 func (o *OIDC) Email(ctx context.Context, code string) (string, error) {
-	tok, err := o.Config.Exchange(ctx, code)
+	tok, err := o.Config.Exchange(context.WithValue(ctx, oauth2.HTTPClient, discoveryClient), code)
 	if err != nil {
 		return "", fmt.Errorf("token exchange failed: %w", err)
 	}
