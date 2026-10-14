@@ -203,3 +203,81 @@ func TestEndToEnd(t *testing.T) {
 		t.Errorf("healthz: %d", resp.StatusCode)
 	}
 }
+
+// A user's own MCP server: its approved tool is offered on /tokens, a token
+// holding it calls it through /mcp, and the call shows up on /activity.
+func TestProxiedToolEndToEnd(t *testing.T) {
+	ctx := context.Background()
+	st := store.OpenTest(t)
+
+	upstream := mcp.NewServer(&mcp.Implementation{Name: "upstream", Version: "0"}, nil)
+	upstream.AddTool(&mcp.Tool{Name: "echo", InputSchema: map[string]any{"type": "object"}, Annotations: &mcp.ToolAnnotations{ReadOnlyHint: true}},
+		func(_ context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: "upstream says " + string(req.Params.Arguments)}}}, nil
+		})
+	up := httptest.NewServer(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return upstream }, &mcp.StreamableHTTPOptions{Stateless: true}))
+	defer up.Close()
+
+	ts := httptest.NewUnstartedServer(nil)
+	pub := "http://" + ts.Listener.Addr().String()
+	cfg := config.Config{
+		PublicURL: pub, OIDCIssuer: "https://idp.example.com", OIDCClientID: "cid", AllowedDomains: []string{"example.com"},
+		VaultKey: bytes.Repeat([]byte{1}, 32), SessionKey: []byte(strings.Repeat("s", 32)),
+		AccessTTL: time.Hour, RefreshTTL: time.Hour, Upstreams: map[string]config.Upstream{},
+		UpstreamAllowHosts: []string{"127.0.0.1"}, CatalogFile: filepath.Join(t.TempDir(), "none.json"),
+	}
+	h, err := buildHandler(cfg, st, oauth2.Endpoint{}, slog.New(slog.DiscardHandler))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ts.Config.Handler = h
+	ts.Start()
+	defer ts.Close()
+
+	u, _ := st.UpsertUser(ctx, "rahmad@example.com")
+	gh, err := st.CreateUpstream(ctx, store.Upstream{UserID: u.ID, Name: "github", URL: up.URL, Auth: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ApproveTools(ctx, u.ID, gh.ID, []store.UpstreamTool{{Name: "echo", Description: "Echo back.", InputSchema: `{"type":"object"}`}}); err != nil {
+		t.Fatal(err)
+	}
+	rec := httptest.NewRecorder()
+	(&auth.Server{Signer: auth.NewSigner(cfg.SessionKey), PublicURL: pub}).SetSession(rec, u)
+	cookie := rec.Result().Cookies()[0]
+	do := func(method, path string, form url.Values) (int, string) {
+		req, _ := http.NewRequest(method, pub+path, strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Origin", pub)
+		req.AddCookie(cookie)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		b, _ := io.ReadAll(resp.Body)
+		return resp.StatusCode, string(b)
+	}
+
+	if code, page := do("GET", "/tokens", nil); code != 200 || !strings.Contains(page, `value="github__echo"`) {
+		t.Fatalf("token form does not offer github__echo: %d", code)
+	}
+	code, page := do("POST", "/tokens", url.Values{"name": {"bot"}, "tools": {"github__echo"}, "expiry": {"7"}})
+	m := regexp.MustCompile(`<pre class="key">(vk_[A-Z0-9]+)</pre>`).FindStringSubmatch(page)
+	if code != 200 || m == nil {
+		t.Fatalf("create token: %d", code)
+	}
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "bot", Version: "0"}, nil).Connect(ctx,
+		&mcp.StreamableClientTransport{Endpoint: pub + "/mcp", HTTPClient: &http.Client{Transport: bearer(m[1])}}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "github__echo", Arguments: map[string]any{"q": "hi"}})
+	if err != nil || res.IsError || res.Content[0].(*mcp.TextContent).Text != `upstream says {"q":"hi"}` {
+		t.Fatalf("proxied call: %+v %v", res, err)
+	}
+	if code, page := do("GET", "/activity", nil); code != 200 || !strings.Contains(page, "<code>github__echo</code>") || !strings.Contains(page, "token bot") {
+		t.Errorf("activity does not list the proxied call: %d", code)
+	}
+}
