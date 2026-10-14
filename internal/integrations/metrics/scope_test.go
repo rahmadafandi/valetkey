@@ -2,6 +2,7 @@ package metrics
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/rahmadafandi/valetkey/internal/tools"
@@ -12,10 +13,17 @@ func TestParseScope(t *testing.T) {
 	if _, err := m.ParseScope(json.RawMessage(`"{namespace=\"web\", team=\"ops\"}"`)); err != nil {
 		t.Errorf("selector: %v", err)
 	}
-	for _, bad := range []string{`3`, `""`, `null`, `"{}"`, `"{namespace=~\"w.*\"}"`, `"{namespace!=\"db\"}"`, `"up{namespace=\"web\"}"`, `"{namespace=\"\"}"`, `"{namespace=\"web\""`} {
+	for _, bad := range []string{`3`, `""`, `null`, `"{}"`, `"{namespace=~\"w.*\"}"`, `"{namespace!=\"db\"}"`, `"up{namespace=\"web\"}"`, `"{namespace=\"\"}"`, `"{namespace=\"web\""`, `"{namespace=\"web\",namespace=\"db\"}"`} {
 		if _, err := m.ParseScope(json.RawMessage(bad)); err == nil {
 			t.Errorf("accepted %s", bad)
 		}
+	}
+}
+
+func TestParseScopeNullMessage(t *testing.T) {
+	_, err := (&Metrics{}).ParseScope(json.RawMessage(`null`))
+	if err == nil || !strings.Contains(err.Error(), "expected one selector string") {
+		t.Errorf("null: %v", err)
 	}
 }
 

@@ -44,6 +44,10 @@ func TestCheckScope(t *testing.T) {
 		"https://jenkins.example.com/job/deploy-web;x/":               false,
 		"https://jenkins.example.com/":                                false,
 		"":                                                            false,
+		"https://jenkins.example.com/%6Aob/evil/job/deploy-web/":      false,
+		"https://jenkins.example.com/j%6Fb/evil/job/deploy-web/":      false,
+		"https://jenkins.example.com/job/%2564eploy-web/":             false,
+		"https://jenkins.example.com/job/deploy-web%3F/":              false,
 	} {
 		args, _ := json.Marshal(map[string]string{"jobURL": jobURL})
 		err := j.CheckScope(scope, "jenkins_deploy", args)

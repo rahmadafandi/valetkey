@@ -45,25 +45,29 @@ func (j *Jenkins) CheckScope(scope any, tool string, args json.RawMessage) error
 }
 
 // jobPath is the job path in a Jenkins job URL: everything from the first
-// "job" segment on must be job/<name> pairs. Dot segments, path parameters
-// (";") and encoded slashes are refused because Jenkins would resolve them
-// to a different job than the one checked here.
+// "job" segment on must be job/<name> pairs. Segments are decoded first
+// because jobURL requests the decoded path. A segment that decodes to a dot
+// segment or to a character that would be read again as path syntax or an
+// escape is refused, so Jenkins resolves exactly the job checked here.
 func jobPath(raw string) (string, bool) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
 		return "", false
 	}
-	parts := strings.Split(strings.Trim(u.EscapedPath(), "/"), "/")
+	var parts []string
+	for _, p := range strings.Split(strings.Trim(u.EscapedPath(), "/"), "/") {
+		seg, err := url.PathUnescape(p)
+		if err != nil || seg == "." || seg == ".." || strings.ContainsAny(seg, `;/\%?#`) {
+			return "", false
+		}
+		parts = append(parts, seg)
+	}
 	first := slices.Index(parts, "job")
 	if first < 0 || (len(parts)-first)%2 != 0 {
 		return "", false
 	}
 	var names []string
-	for i, p := range parts {
-		seg, err := url.PathUnescape(p)
-		if err != nil || seg == "." || seg == ".." || strings.ContainsAny(seg, `;/\`) {
-			return "", false
-		}
+	for i, seg := range parts {
 		if i < first {
 			continue
 		}

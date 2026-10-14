@@ -3,6 +3,8 @@ package metrics
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 
 	promlabels "github.com/prometheus/prometheus/model/labels"
 	"github.com/prometheus/prometheus/promql/parser"
@@ -22,7 +24,7 @@ type metricsScope struct {
 // ParseScope reads one set of equality matchers, e.g. {namespace="web"}.
 func (m *Metrics) ParseScope(raw json.RawMessage) (any, error) {
 	var sel string
-	if err := json.Unmarshal(raw, &sel); err != nil {
+	if err := json.Unmarshal(raw, &sel); err != nil || strings.TrimSpace(sel) == "" {
 		return nil, errors.New(`expected one selector string such as {namespace="web"}`)
 	}
 	ms, err := promql.ParseMetricSelector(sel)
@@ -32,7 +34,12 @@ func (m *Metrics) ParseScope(raw json.RawMessage) (any, error) {
 	if len(ms) == 0 {
 		return nil, errors.New(`expected at least one matcher such as {namespace="web"}`)
 	}
+	seen := map[string]bool{}
 	for _, x := range ms {
+		if seen[x.Name] {
+			return nil, fmt.Errorf("label %s appears twice; use each label once", x.Name)
+		}
+		seen[x.Name] = true
 		if x.Type != promlabels.MatchEqual || x.Name == promlabels.MetricName || x.Value == "" {
 			return nil, errors.New(`use only label="value" matchers with a non-empty value, without a metric name`)
 		}

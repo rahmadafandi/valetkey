@@ -47,14 +47,21 @@ func (l *Loki) CheckScope(scope any, tool string, args json.RawMessage) error {
 // streamSelectors is every {...} in a LogQL query, with the whitespace outside
 // its quoted values removed. Braces inside quoted strings (a line filter's
 // regex, a line_format template) are not selectors; an unclosed selector or
-// string makes the query unreadable, and so does a # comment, which could hide
-// a quote from this scanner but not from Loki.
+// string makes the query unreadable, and so does a comment (#, // or /*),
+// which could hide a quote from this scanner but not from Loki.
 func streamSelectors(query string) ([]string, bool) {
 	var selectors []string
 	var current *strings.Builder
 	quote := rune(0)
 	escaped := false
+	slash := false
 	for _, r := range query {
+		if quote == 0 {
+			if slash && (r == '/' || r == '*') {
+				return nil, false
+			}
+			slash = r == '/'
+		}
 		if quote != 0 {
 			if current != nil {
 				current.WriteRune(r)

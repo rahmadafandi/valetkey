@@ -86,6 +86,7 @@ func (r refusal) Error() string { return r.msg }
 // starts with "refused: ".
 func Refuse(format string, a ...any) error { return refusal{"refused: " + fmt.Sprintf(format, a...)} }
 
+// IsRefusal reports whether err, or an error it wraps, was built by Refuse.
 func IsRefusal(err error) bool { return errors.As(err, new(refusal)) }
 
 // StringOrList reads a JSON string or a list of non-empty strings.

@@ -37,7 +37,10 @@ func TestCheckScope(t *testing.T) {
 		`{app="web"`:                                                false,
 		`{app="web"} |= "x`:                                         false,
 		``:                                                          false,
-		"sum(rate({app=\"web\"}[5m])) # \"\n + sum(rate({app=~\".+\"}[5m])) #\"": false,
+		"sum(count_over_time({app=\"web\"}[5m])) /* ` */ + sum(count_over_time({app=~\".+\"}[5m])) /* ` */": false,
+		"sum(count_over_time({app=\"web\"}[5m])) // `\n + sum(count_over_time({app=~\".+\"}[5m])) // `":     false,
+		`sum(count_over_time({app="web"}[5m])) / sum(count_over_time({app="web"} |= "a//b" [5m]))`:          true,
+		"sum(rate({app=\"web\"}[5m])) # \"\n + sum(rate({app=~\".+\"}[5m])) #\"":                            false,
 	} {
 		args, _ := json.Marshal(map[string]string{"query": query})
 		err := l.CheckScope(scope, "loki_query", args)

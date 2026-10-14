@@ -278,3 +278,18 @@ func TestOAuthTokenSeesAllTools(t *testing.T) {
 		t.Fatalf("tools/list: %d %v", len(res.Tools), err)
 	}
 }
+
+func TestHandlerRefusesToolOutsideTokenList(t *testing.T) {
+	deploy := fake{}.Tools()[2]
+	h := handler(fake{}, deploy, nil, "https://center.test", slog.New(slog.DiscardHandler))
+	req := &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{Name: deploy.Name}, Extra: &mcp.RequestExtra{
+		TokenInfo: &mcpauth.TokenInfo{UserID: "u1", Extra: map[string]any{RestrictionKey: &Restriction{Name: "atlas", Tools: []string{"fake_echo"}}}},
+	}}
+	res, err := h(context.Background(), req)
+	if err != nil || !res.IsError {
+		t.Fatalf("%+v %v", res, err)
+	}
+	if text := res.Content[0].(*mcp.TextContent).Text; text != "refused: fake_deploy: not allowed for this token" {
+		t.Errorf("text = %q", text)
+	}
+}
