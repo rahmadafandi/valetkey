@@ -19,6 +19,7 @@ import (
 	"github.com/rahmadafandi/valetkey/internal/netguard"
 	"github.com/rahmadafandi/valetkey/internal/store"
 	"github.com/rahmadafandi/valetkey/internal/tools"
+	"github.com/rahmadafandi/valetkey/internal/upstream"
 )
 
 type Proxy struct {
@@ -111,7 +112,7 @@ func (p *Proxy) Integrations(ctx context.Context, userID string) ([]tools.Integr
 	var cur *integration
 	for _, r := range rows {
 		if cur == nil || cur.u.ID != r.Upstream.ID {
-			out = append(out, &integration{p: p, u: r.Upstream})
+			out = append(out, &integration{p: p, userID: userID, u: r.Upstream})
 			cur = out[len(out)-1].(*integration)
 		}
 		cur.tools = append(cur.tools, r.Tool)
@@ -120,9 +121,10 @@ func (p *Proxy) Integrations(ctx context.Context, userID string) ([]tools.Integr
 }
 
 type integration struct {
-	p     *Proxy
-	u     store.Upstream
-	tools []store.UpstreamTool
+	p      *Proxy
+	userID string // whose credentials a refreshed OAuth login is saved for
+	u      store.Upstream
+	tools  []store.UpstreamTool
 }
 
 func (i *integration) System() string { return CredsSystem(i.u.ID) }
@@ -158,30 +160,52 @@ func (i *integration) Tools() []tools.Tool {
 }
 
 // caller opens a session per call: initialize, tools/call with the upstream's own name, close.
+// An OAuth login is refreshed when it is about to expire, or once after a 401.
 // ponytail: two round trips per call; pool sessions per (user, upstream) if latency matters.
 func (i *integration) caller(tool string) func(ctx context.Context, c tools.Creds, args json.RawMessage) (string, error) {
 	return func(ctx context.Context, c tools.Creds, args json.RawMessage) (string, error) {
 		if len(args) == 0 || string(args) == "null" {
 			args = json.RawMessage("{}")
 		}
-		cs, at, err := i.p.connect(ctx, i.u, c)
-		if err != nil {
-			return "", err
-		}
-		defer cs.Close()
-		res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
-		if err != nil {
-			return "", upstreamErr(i.u, at, err)
-		}
-		out := flatten(res.Content)
-		if res.IsError {
-			if out == "" {
-				out = "the upstream reported an error"
+		oauth := i.u.Auth == "oauth" && c["pending"] == ""
+		refreshed := false
+		if oauth && expiring(c) {
+			var err error
+			if c, err = i.p.refresh(ctx, i.userID, i.u, c["access_token"]); err != nil {
+				return "", err
 			}
-			return "", errors.New(out)
+			refreshed = true
 		}
-		return out, nil
+		out, err := i.call(ctx, tool, c, args)
+		// A 401 comes before the upstream runs the tool, so retrying cannot repeat a write.
+		if oauth && !refreshed && errors.Is(err, upstream.ErrUnauthorized) {
+			if c, err = i.p.refresh(ctx, i.userID, i.u, c["access_token"]); err != nil {
+				return "", err
+			}
+			out, err = i.call(ctx, tool, c, args)
+		}
+		return out, err
 	}
+}
+
+func (i *integration) call(ctx context.Context, tool string, c tools.Creds, args json.RawMessage) (string, error) {
+	cs, at, err := i.p.connect(ctx, i.u, c)
+	if err != nil {
+		return "", err
+	}
+	defer cs.Close()
+	res, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: tool, Arguments: args})
+	if err != nil {
+		return "", upstreamErr(i.u, at, err)
+	}
+	out := flatten(res.Content)
+	if res.IsError {
+		if out == "" {
+			out = "the upstream reported an error"
+		}
+		return "", errors.New(out)
+	}
+	return out, nil
 }
 
 // flatten keeps text and replaces any other content with a note naming its type.

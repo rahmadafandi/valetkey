@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -29,6 +30,13 @@ type fakeOpts struct {
 	Header   string // defaults to Authorization
 	PageSize int
 	Tools    []fakeTool
+
+	// OAuth variant: requests need "Authorization: Bearer <t>" with Bearer(t) true.
+	Bearer     func(token string) bool
+	AuthServer string // listed in the protected-resource metadata
+	// Challenge points the 401's WWW-Authenticate at /custom-prm; otherwise the
+	// metadata is only at /.well-known/oauth-protected-resource.
+	Challenge bool
 }
 
 type fake struct {
@@ -54,6 +62,27 @@ func newFake(t *testing.T, opts fakeOpts) *fake {
 	f := &fake{opts: opts, tools: opts.Tools, calls: map[string]int{}, Guard: &netguard.Guard{AllowHosts: []string{"127.0.0.1"}}}
 	h := mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return f.server() }, &mcp.StreamableHTTPOptions{Stateless: true})
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if opts.AuthServer != "" {
+			prmPath := "/.well-known/oauth-protected-resource"
+			if opts.Challenge {
+				prmPath = "/custom-prm"
+			}
+			if r.URL.Path == prmPath {
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{"resource": f.URL, "authorization_servers": []string{opts.AuthServer}})
+				return
+			}
+		}
+		if opts.Bearer != nil {
+			tok, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
+			if !ok || !opts.Bearer(tok) {
+				if opts.Challenge {
+					w.Header().Set("WWW-Authenticate", `Bearer resource_metadata="http://`+r.Host+`/custom-prm"`)
+				}
+				http.Error(w, "unauthorized", http.StatusUnauthorized)
+				return
+			}
+		}
 		body, _ := io.ReadAll(r.Body)
 		r.Body = io.NopCloser(bytes.NewReader(body))
 		type impl struct {

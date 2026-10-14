@@ -111,6 +111,10 @@ func (p *Proxy) connect(ctx context.Context, u store.Upstream, c tools.Creds) (*
 			at.header = "Authorization"
 		}
 	case "oauth":
+		// A sign-in still in progress holds a verifier, not a login.
+		if c["pending"] != "" {
+			return nil, nil, fmt.Errorf("%s: %w", u.Name, tools.ErrNotConnected)
+		}
 		at.header, at.value = "Authorization", "Bearer "+c["access_token"]
 	}
 	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
