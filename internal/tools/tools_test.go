@@ -521,3 +521,23 @@ func TestWriteLimitHoldsUnderParallelCalls(t *testing.T) {
 		t.Errorf("%d calls ran, want %d", n, limit)
 	}
 }
+
+type elsewhere struct{ fake }
+
+func (elsewhere) ConnectURL(publicURL string) string { return publicURL + "/upstreams" }
+
+func TestConnectorURL(t *testing.T) {
+	load := func(context.Context, string, string) (Creds, error) { return nil, ErrNotConnected }
+	tl := Tool{Name: "elsewhere_echo", Run: func(context.Context, Creds, json.RawMessage) (string, error) { return "", nil }}
+	h := handler(elsewhere{}, tl, load, "https://center.test", slog.New(slog.DiscardHandler), nil)
+	res, err := h(context.Background(), &mcp.CallToolRequest{
+		Params: &mcp.CallToolParamsRaw{Name: tl.Name},
+		Extra:  &mcp.RequestExtra{TokenInfo: &mcpauth.TokenInfo{UserID: "u1"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if text := res.Content[0].(*mcp.TextContent).Text; text != "Fake is not connected. Connect it at https://center.test/upstreams" {
+		t.Errorf("got %q", text)
+	}
+}

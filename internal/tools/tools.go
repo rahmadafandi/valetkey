@@ -36,6 +36,7 @@ type Tool struct {
 	Schema      map[string]any
 	Destructive bool          // mutates the upstream; clients should confirm first
 	Timeout     time.Duration // 0 means DefaultTimeout
+	Unscoped    bool          // proxied tool: valetkey cannot read its arguments, so token scope does not apply
 	Run         func(ctx context.Context, c Creds, args json.RawMessage) (string, error)
 }
 
@@ -51,6 +52,9 @@ type Integration interface {
 // Helper is implemented by integrations that explain, step by step, where a
 // user finds the values their credential form asks for.
 type Helper interface{ Help() []string }
+
+// Connector is implemented by integrations whose connect page is not /connect/<system>.
+type Connector interface{ ConnectURL(publicURL string) string }
 
 type LoadCreds func(ctx context.Context, userID, system string) (Creds, error)
 
@@ -146,6 +150,9 @@ func handler(in Integration, t Tool, load LoadCreds, publicURL string, log *slog
 			out, err = run(ctx, in, t, load, userID, req.Params.Arguments, log)
 		}
 		connectURL := publicURL + "/connect/" + in.System()
+		if c, ok := in.(Connector); ok {
+			connectURL = c.ConnectURL(publicURL)
+		}
 		switch {
 		case errors.Is(err, ErrNotConnected):
 			out = fmt.Sprintf("%s is not connected. Connect it at %s", in.Title(), connectURL)
