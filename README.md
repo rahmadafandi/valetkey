@@ -6,7 +6,7 @@ valetkey is a self-hosted MCP server that lets AI agents do operations work (ope
 
 A token does not only name the tools an agent may call. It names the resources those tools may reach: this repository, these Jenkins jobs, that log stream. Write tools refuse to act on stale state and hand back something to wait on. Each token has a write limit per hour and an optional dry run, and every call to a tool on the token's list is logged, refused ones included.
 
-valetkey is not a general MCP gateway. If you want to put many MCP servers behind one front door, [Obot](https://github.com/obot-platform/obot), [Bifrost](https://github.com/maximhq/bifrost) and [IBM ContextForge](https://github.com/IBM/mcp-context-forge) do that. Choose valetkey when your concern is what an agent can reach and change in Jenkins, Argo CD, Loki, Prometheus and Bitbucket Cloud, and you want that written down per token.
+valetkey is not a general MCP gateway. It can put the remote MCP servers each person adds behind the same front door (see [Your own MCP servers](#your-own-mcp-servers)), but those tools get no resource scope. If you want a gateway with policy for many MCP servers, [Obot](https://github.com/obot-platform/obot), [Bifrost](https://github.com/maximhq/bifrost) and [IBM ContextForge](https://github.com/IBM/mcp-context-forge) do that. Choose valetkey when your concern is what an agent can reach and change in Jenkins, Argo CD, Loki, Prometheus and Bitbucket Cloud, and you want that written down per token.
 
 ## Quickstart
 
@@ -79,6 +79,46 @@ Add `<SYSTEM>_INSECURE=true` to skip TLS verification for an endpoint with a sel
 **Metrics.** `METRICS_URL` takes the same two forms. Directly, it accepts any Prometheus-compatible API: Prometheus, Mimir, Thanos or VictoriaMetrics, for example `https://prometheus.example.com`. Through Grafana, use the proxy address of your Prometheus data source, found the same way as for Loki.
 
 Limit in v0.1: multi-tenant Loki that needs an `X-Scope-OrgID` header is not supported yet. valetkey has no setting to send that header.
+
+## Your own MCP servers
+
+Each person can put remote MCP servers of their own behind valetkey, next to the built-in tools. An agent then needs one connection to valetkey instead of one per server, and a token can list the proxied tools like any other. Open **Servers** (`/upstreams`) to add one.
+
+Add a server with a name, its URL and a login kind:
+
+- **Token.** A header name (`Authorization` by default) and its value. valetkey stores the value only after it has fetched the server's tools with it.
+- **OAuth.** valetkey signs in to the server the way an MCP client does. It finds the server's authorization server from the `WWW-Authenticate` header of the 401 answer, or from the well-known address, and it needs `S256` in `code_challenge_methods_supported`, so it refuses a server without it. If the server offers dynamic client registration, valetkey registers itself. If not, the page asks for a client ID and secret and shows which host receives them. valetkey uses PKCE and sends `resource` with the authorization, token and refresh requests. It requests no `scope` yet, so a server that insists on scopes may not work. To sign in again, use **Sign in again** on the server's page: the old login keeps working until the new one finishes.
+- **None.** For a server that needs no login.
+
+The name is lowercase letters, digits and hyphens, up to 24 characters. Agents see each tool as `<server>__<tool>`, so a tool `search` on a server named `docs` appears as `docs__search`.
+
+### Approving tools
+
+valetkey fetches the server's tool list and shows every tool with its full description and input schema. Nothing reaches an agent until you press **Approve these tools**, and approving stores exactly the list you were shown. The server writes those descriptions and agents follow them, so read them first.
+
+Servers change. **Refresh** (on the server's page) fetches the list again and shows what is new, changed or removed. Until you approve, your agents keep the list you approved before. A tool the server has dropped stops being offered at once.
+
+valetkey keeps at most 200 tools per server, and you can add at most 20 servers. A tool is skipped, and listed on the review page, when its input schema is not a JSON object schema or when its prefixed name is not 1 to 64 letters, digits, `_` or `-`. Tools that the MCP SDK drops for an invalid `x-mcp-header` annotation never appear.
+
+### What a token can limit
+
+A token lists proxied tools by name, in their own group on the token form. A token without a tool cannot see or call it. A proxied tool counts as one that changes things when the server sets `destructiveHint: true` or does not set `readOnlyHint: true`. So the write limit and dry run apply to proxied tools. There is no scope for them: valetkey cannot know what the arguments of a tool you added mean, so it cannot limit which resources they reach.
+
+Token grants are by name. If you remove a server and add another with the same name, a token that listed `name__tool` applies to the new server's tool of that name. Check your tokens after you replace a server.
+
+### Reaching internal servers
+
+valetkey calls a server only over https and refuses addresses that are not on the public internet: loopback, private ranges, link-local (including cloud metadata), and similar. `UPSTREAM_ALLOW_HOSTS` is a list of exact host names that skip that check and may use plain http, for an MCP server on your own network:
+
+```sh
+UPSTREAM_ALLOW_HOSTS=mcp.internal.example.com,tools.corp.example.com
+```
+
+An allowed name trusts whatever its DNS returns, private addresses included, and is reachable on any port. List only names you control. On an IPv6-only network with NAT64, a server that only has an IPv4 address cannot be reached, because `64:ff9b::/96` is refused. [SECURITY.md](SECURITY.md) has the full list.
+
+### Not proxied
+
+stdio servers, resources, prompts, sampling, elicitation and roots. valetkey declares no client capabilities, so a server cannot ask it for them. It sends `User-Agent: valetkey/<version>` on every request to a server.
 
 ## Personal access tokens
 
@@ -175,6 +215,7 @@ Names and defaults match [.env.example](.env.example).
 | `LOKI_URL`, `LOKI_INSECURE` | no | | Turns Loki on, `true` skips TLS verification |
 | `METRICS_URL`, `METRICS_INSECURE` | no | | Turns metrics on, `true` skips TLS verification |
 | `BITBUCKET_URL`, `BITBUCKET_INSECURE` | no | | Turns Bitbucket on, `true` skips TLS verification |
+| `UPSTREAM_ALLOW_HOSTS` | no | | Exact host names of MCP servers that may use http and skip the address check, comma-separated |
 
 ## More
 
