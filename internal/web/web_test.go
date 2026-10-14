@@ -276,6 +276,10 @@ func TestActivity(t *testing.T) {
 	if _, body := e.get(t, "/activity?user="+other.ID, true); strings.Contains(body, "secret_tool") {
 		t.Error("a non-admin read another user's calls")
 	}
+	e.as.Store.RecordCall(ctx, store.ToolCall{UserID: other.ID, TokenName: "bobs-bot", Tool: "bob_only_tool", Outcome: "ok", Args: `{}`})
+	if _, body := e.get(t, "/activity?token=bobs-bot", true); strings.Contains(body, "bob_only_tool") {
+		t.Error("a non-admin read another user's calls by token name")
+	}
 	if _, body := e.get(t, "/activity?tool=nothing_here", true); !strings.Contains(body, "No calls match") {
 		t.Error("filtered empty state missing")
 	}
