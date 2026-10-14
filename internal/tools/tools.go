@@ -111,11 +111,28 @@ func handler(in Integration, t Tool, load LoadCreds, publicURL string, log *slog
 		r := RestrictionOf(req.Extra.TokenInfo)
 		var out string
 		var err error
+		var dryRun bool
 		switch {
 		case r != nil && !r.Allows(t.Name):
 			err = Refuse("%s: not allowed for this token", t.Name)
 		case r != nil:
-			if err = r.Scope.Check(in, t.Name, req.Params.Arguments); err == nil {
+			err = r.Scope.Check(in, t.Name, req.Params.Arguments)
+			if err == nil && t.Destructive && r.MaxWritesPerHour > 0 && audit != nil {
+				// Counted before this call is recorded, so concurrent calls can overshoot by a few.
+				n, cerr := audit.CountWrites(ctx, r.TokenID, time.Now().Add(-time.Hour))
+				switch {
+				case cerr != nil:
+					log.Error("count writes", "token", r.Name, "err", cerr)
+					err = fmt.Errorf("%s: could not check this token's write limit (internal error)", t.Name)
+				case n >= r.MaxWritesPerHour:
+					err = Refuse("%s: write limit of %d/hour reached for this token", t.Name, r.MaxWritesPerHour)
+				}
+			}
+			switch {
+			case err != nil:
+			case t.Destructive && r.DryRun:
+				out, dryRun = fmt.Sprintf("dry-run: would call %s with %s", t.Name, truncate(string(req.Params.Arguments), 1024)), true
+			default:
 				out, err = run(ctx, in, t, load, userID, req.Params.Arguments, log)
 			}
 		default:
@@ -139,6 +156,8 @@ func handler(in Integration, t Tool, load LoadCreds, publicURL string, log *slog
 		if audit != nil && userID != "" {
 			outcome := "ok"
 			switch {
+			case dryRun:
+				outcome = "dry_run"
 			case IsRefusal(err):
 				outcome = "refused"
 			case err != nil:

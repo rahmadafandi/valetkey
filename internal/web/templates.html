@@ -113,7 +113,8 @@ input{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:10p
   <div class="row">
     <span><strong>{{.Name}}</strong> <span class="muted">· {{len .Tools}} tools · created {{.CreatedAt.Format "2006-01-02"}}
       · {{if .LastUsedAt}}last used {{.LastUsedAt.Format "2006-01-02 15:04"}}{{else}}never used{{end}}
-      · {{if .ExpiresAt}}expires {{.ExpiresAt.Format "2006-01-02"}}{{else}}no expiry{{end}}</span></span>
+      · {{if .ExpiresAt}}expires {{.ExpiresAt.Format "2006-01-02"}}{{else}}no expiry{{end}}
+      · {{if .DryRun}}dry run{{else}}{{if .MaxWritesPerHour}}{{.MaxWritesPerHour}} writes/hour{{else}}no write limit{{end}}{{end}}</span></span>
     <form method="post" action="/tokens/{{.ID}}/revoke"><button class="btn ghost" type="submit">Revoke</button></form>
   </div>
   {{else}}<p class="muted">No tokens yet.</p>{{end}}
@@ -129,6 +130,10 @@ input{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:10p
     <div><label style="font-weight:400;margin:4px 0"><input type="checkbox" name="tools" value="{{.Name}}" style="width:auto" {{if .Checked}}checked{{end}}>
       <code>{{.Name}}</code>{{if .Destructive}} <span class="error" style="padding:1px 6px">changes things</span>{{end}}</label></div>
     {{end}}
+    <label for="max_writes">Write limit per hour <span class="muted">(0 = unlimited)</span></label>
+    <input id="max_writes" name="max_writes" type="number" min="0" max="1000" value="{{if .MaxWrites}}{{.MaxWrites}}{{else}}20{{end}}">
+    <label for="dry_run" style="font-weight:400"><input id="dry_run" type="checkbox" name="dry_run" style="width:auto" {{if .DryRun}}checked{{end}}>
+      Dry run: tools that change things only report what they would do</label>
     <label for="scope">Scope <span class="muted">(JSON; a tool family without a key reaches nothing)</span></label>
     <textarea id="scope" name="scope" rows="4" style="width:100%;font:13px ui-monospace,monospace;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text)"
       placeholder='{"bitbucket":"acme/web","jenkins":["deploy-web"],"loki":"{app=\"web\"}"}'>{{.Scope}}</textarea>

@@ -17,15 +17,27 @@ import (
 // PersonalTokenPrefix marks a personal access token, so /mcp can tell it from an OAuth access token.
 const PersonalTokenPrefix = "vk_"
 
+// NewToken is what a person asks for when creating a personal access token.
+type NewToken struct {
+	Name             string
+	Tools            []string
+	Scope            []byte
+	TTL              time.Duration // 0 means it never expires
+	MaxWritesPerHour int           // 0 means unlimited
+	DryRun           bool
+}
+
 // CreatePersonalToken stores a new token for userID and returns it; only its hash is kept.
-// A zero ttl means the token never expires.
-func (s *Server) CreatePersonalToken(ctx context.Context, userID, name string, toolNames []string, scope []byte, ttl time.Duration) (string, error) {
-	name = strings.TrimSpace(name)
+func (s *Server) CreatePersonalToken(ctx context.Context, userID string, n NewToken) (string, error) {
+	name, toolNames, scope, ttl := strings.TrimSpace(n.Name), n.Tools, n.Scope, n.TTL
 	if name == "" {
 		return "", errors.New("name is required")
 	}
 	if len(toolNames) == 0 {
 		return "", errors.New("pick at least one tool")
+	}
+	if n.MaxWritesPerHour < 0 {
+		return "", errors.New("write limit cannot be negative")
 	}
 	if _, err := tools.ParseScope(s.Integrations, scope); err != nil {
 		return "", err
@@ -33,7 +45,8 @@ func (s *Server) CreatePersonalToken(ctx context.Context, userID, name string, t
 	if len(strings.TrimSpace(string(scope))) == 0 {
 		scope = []byte("{}")
 	}
-	t := store.PersonalToken{UserID: userID, Name: name, Tools: toolNames, Scope: scope}
+	t := store.PersonalToken{UserID: userID, Name: name, Tools: toolNames, Scope: scope,
+		MaxWritesPerHour: n.MaxWritesPerHour, DryRun: n.DryRun}
 	if ttl > 0 {
 		exp := time.Now().Add(ttl)
 		t.ExpiresAt = &exp
@@ -63,7 +76,8 @@ func (s *Server) verifyPersonal(ctx context.Context, token string) (*mcpauth.Tok
 		exp = *p.ExpiresAt
 	}
 	return &mcpauth.TokenInfo{UserID: u.ID, Expiration: exp, Extra: map[string]any{
-		"email":              u.Email,
-		tools.RestrictionKey: &tools.Restriction{TokenID: p.ID, Name: p.Name, Tools: p.Tools, Scope: scope},
+		"email": u.Email,
+		tools.RestrictionKey: &tools.Restriction{TokenID: p.ID, Name: p.Name, Tools: p.Tools, Scope: scope,
+			MaxWritesPerHour: p.MaxWritesPerHour, DryRun: p.DryRun},
 	}}, nil
 }

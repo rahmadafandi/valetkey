@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -245,7 +246,18 @@ func (h *Web) createToken(w http.ResponseWriter, r *http.Request) {
 	}
 	name, scope, expiry := strings.TrimSpace(r.PostForm.Get("name")), strings.TrimSpace(r.PostForm.Get("scope")), r.PostForm.Get("expiry")
 	picked := r.PostForm["tools"]
-	form := map[string]any{"Name": name, "Scope": scope, "Expiry": expiry, "Tools": picked}
+	dryRun := r.PostForm.Get("dry_run") == "on"
+	form := map[string]any{"Name": name, "Scope": scope, "Expiry": expiry, "Tools": picked, "DryRun": dryRun, "MaxWrites": r.PostForm.Get("max_writes")}
+	maxWrites := 20
+	if v := strings.TrimSpace(r.PostForm.Get("max_writes")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 || n > 1000 {
+			form["Error"] = "Write limit must be a whole number from 0 (unlimited) to 1000."
+			h.renderTokens(w, r, u, form, http.StatusBadRequest)
+			return
+		}
+		maxWrites = n
+	}
 	known := map[string]bool{}
 	for _, t := range h.toolRows(nil) {
 		known[t.Name] = true
@@ -263,7 +275,8 @@ func (h *Web) createToken(w http.ResponseWriter, r *http.Request) {
 		h.renderTokens(w, r, u, form, http.StatusBadRequest)
 		return
 	}
-	token, err := h.Auth.CreatePersonalToken(r.Context(), u.ID, name, picked, []byte(scope), ttl)
+	token, err := h.Auth.CreatePersonalToken(r.Context(), u.ID, auth.NewToken{
+		Name: name, Tools: picked, Scope: []byte(scope), TTL: ttl, MaxWritesPerHour: maxWrites, DryRun: dryRun})
 	if err != nil {
 		form["Error"] = "Could not create the token: " + err.Error()
 		h.renderTokens(w, r, u, form, http.StatusBadRequest)

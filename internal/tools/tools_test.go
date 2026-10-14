@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -22,6 +23,9 @@ import (
 
 type fake struct{}
 
+// deploys and echoes count the calls that reached a tool's Run.
+var deploys, echoes atomic.Int32
+
 func (fake) System() string                              { return "fake" }
 func (fake) Title() string                               { return "Fake" }
 func (fake) Fields() []Field                             { return []Field{{Name: "token", Label: "Token", Secret: true}} }
@@ -31,7 +35,7 @@ func (fake) ParseScope(raw json.RawMessage) (any, error) { return StringOrList(r
 
 // CheckScope fences bitbucket_fake by its repo argument and lets the other tools through.
 func (fake) CheckScope(scope any, tool string, args json.RawMessage) error {
-	if tool != "bitbucket_fake" {
+	if tool != "bitbucket_fake" && tool != "bitbucket_write" {
 		return nil
 	}
 	var a struct{ Repo string }
@@ -51,12 +55,21 @@ func (fake) Tools() []Tool {
 				if err := Args(raw, &a); err != nil {
 					return "", err
 				}
+				echoes.Add(1)
 				return c["token"] + ":" + a.Msg, nil
 			}},
 		{Name: "bitbucket_fake", Description: "scoped by repo", Schema: Object(map[string]any{"repo": Str("repo")}),
 			Run: func(context.Context, Creds, json.RawMessage) (string, error) { return "reached", nil }},
 		{Name: "fake_deploy", Description: "deploy", Schema: Object(nil), Destructive: true,
-			Run: func(context.Context, Creds, json.RawMessage) (string, error) { return "deployed", nil }},
+			Run: func(context.Context, Creds, json.RawMessage) (string, error) {
+				deploys.Add(1)
+				return "deployed", nil
+			}},
+		{Name: "bitbucket_write", Description: "scoped write", Schema: Object(map[string]any{"repo": Str("repo")}), Destructive: true,
+			Run: func(context.Context, Creds, json.RawMessage) (string, error) {
+				deploys.Add(1)
+				return "written", nil
+			}},
 		{Name: "fake_unauth", Description: "unauth", Schema: Object(nil),
 			Run: func(context.Context, Creds, json.RawMessage) (string, error) {
 				return "", upstream.StatusErr("fake", 401, []byte("bad token"))
@@ -74,6 +87,11 @@ func (fake) Tools() []Tool {
 			}},
 	}
 }
+
+var budgets = map[string]struct {
+	max int
+	dry bool
+}{"cap3": {3, false}, "unlimited": {0, false}, "dry": {0, true}}
 
 const metaURL = "https://center.test/.well-known/oauth-protected-resource"
 
@@ -95,6 +113,12 @@ func serveAudit(t *testing.T, audit Audit) string {
 			return &mcpauth.TokenInfo{UserID: "u1", Expiration: time.Now().Add(time.Hour), Extra: map[string]any{
 				"email":        "u1@example.com",
 				RestrictionKey: &Restriction{Name: "atlas", Tools: []string{"fake_echo", "bitbucket_fake"}, Scope: Scope{"fake": []string{"acme/web"}}},
+			}}, nil
+		}
+		if budget, ok := budgets[tok]; ok {
+			return &mcpauth.TokenInfo{UserID: "u1", Expiration: time.Now().Add(time.Hour), Extra: map[string]any{
+				"email":        "u1@example.com",
+				RestrictionKey: &Restriction{TokenID: "tok1", Name: tok, Tools: []string{"fake_echo", "fake_deploy", "bitbucket_write"}, Scope: Scope{"fake": []string{"acme/web"}}, MaxWritesPerHour: budget.max, DryRun: budget.dry},
 			}}, nil
 		}
 		if id, ok := users[tok]; ok {
@@ -408,5 +432,57 @@ func TestAuditTruncationKeepsValidUTF8(t *testing.T) {
 	c := a.calls[0]
 	if !utf8.ValidString(c.Args) || !utf8.ValidString(c.Message) || !strings.Contains(c.Args, "[truncated") {
 		t.Errorf("args valid=%v message valid=%v", utf8.ValidString(c.Args), utf8.ValidString(c.Message))
+	}
+}
+
+func TestWriteBudget(t *testing.T) {
+	cases := []struct {
+		name, token string
+		writes      int
+		refused     bool
+	}{
+		{"at the limit", "cap3", 3, true},
+		{"under the limit", "cap3", 2, false},
+		{"unlimited", "unlimited", 1000, false},
+		{"oauth caller", "t1", 1000, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			deploys.Store(0)
+			cs := connect(t, serveAudit(t, &fakeAudit{writes: c.writes}), c.token)
+			text, isErr := call(t, cs, "fake_deploy", nil)
+			if c.refused {
+				if !isErr || !strings.HasPrefix(text, "refused: fake_deploy: ") || !strings.Contains(text, "write limit of 3/hour reached") || deploys.Load() != 0 {
+					t.Errorf("text = %q isErr = %v deploys = %d", text, isErr, deploys.Load())
+				}
+				echoes.Store(0)
+				if _, isErr := call(t, cs, "fake_echo", map[string]any{"msg": "x"}); isErr || echoes.Load() != 1 {
+					t.Error("a read tool must ignore the write limit")
+				}
+			} else if isErr || deploys.Load() != 1 {
+				t.Errorf("text = %q isErr = %v deploys = %d", text, isErr, deploys.Load())
+			}
+		})
+	}
+}
+
+func TestDryRun(t *testing.T) {
+	deploys.Store(0)
+	echoes.Store(0)
+	a := &fakeAudit{}
+	cs := connect(t, serveAudit(t, a), "dry")
+	text, isErr := call(t, cs, "fake_deploy", nil)
+	if isErr || !strings.HasPrefix(text, "dry-run: would call fake_deploy with ") || deploys.Load() != 0 {
+		t.Fatalf("text = %q isErr = %v deploys = %d", text, isErr, deploys.Load())
+	}
+	if len(a.calls) != 1 || a.calls[0].Outcome != "dry_run" || !a.calls[0].IsWrite {
+		t.Errorf("calls = %+v", a.calls)
+	}
+	if _, isErr := call(t, cs, "fake_echo", map[string]any{"msg": "x"}); isErr || echoes.Load() != 1 {
+		t.Error("a read tool must still run in dry-run mode")
+	}
+	text, isErr = call(t, cs, "bitbucket_write", map[string]any{"repo": "acme/other"})
+	if !isErr || !strings.HasPrefix(text, "refused: ") || deploys.Load() != 0 {
+		t.Errorf("out-of-scope write in dry run: %q isErr = %v", text, isErr)
 	}
 }

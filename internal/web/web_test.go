@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -188,6 +189,9 @@ func TestTokens(t *testing.T) {
 		"bad scope":    {"name": {"x"}, "tools": {"loki_query"}, "scope": {`{"jenkin":"x"}`}, "expiry": {"30"}},
 		"bad expiry":   {"name": {"x"}, "tools": {"loki_query"}, "expiry": {"365"}},
 		"no tools":     {"name": {"x"}, "expiry": {"30"}},
+		"negative":     {"name": {"x"}, "tools": {"loki_query"}, "expiry": {"30"}, "max_writes": {"-1"}},
+		"not a number": {"name": {"x"}, "tools": {"loki_query"}, "expiry": {"30"}, "max_writes": {"abc"}},
+		"too many":     {"name": {"x"}, "tools": {"loki_query"}, "expiry": {"30"}, "max_writes": {"1001"}},
 	} {
 		if code, body := e.post(t, "/tokens", form, e.url); code != 400 || !strings.Contains(body, `class="error"`) {
 			t.Errorf("%s: %d", name, code)
@@ -206,11 +210,25 @@ func TestTokens(t *testing.T) {
 	if r := tools.RestrictionOf(ti); err != nil || r == nil || !r.Allows("jenkins_deploy") || r.Scope["fake"].([]string)[0] != "x" {
 		t.Fatalf("created token: %+v %v", r, err)
 	}
+	if r := tools.RestrictionOf(ti); r.MaxWritesPerHour != 20 || r.DryRun {
+		t.Errorf("defaults: max %d dry %v", r.MaxWritesPerHour, r.DryRun)
+	}
+	capped := url.Values{"name": {"capped"}, "tools": {"jenkins_deploy"}, "expiry": {"30"}, "max_writes": {"5"}, "dry_run": {"on"}}
+	_, cbody := e.post(t, "/tokens", capped, e.url)
+	cm := regexp.MustCompile(`<pre>(vk_[A-Z0-9]+)</pre>`).FindStringSubmatch(cbody)
+	if cm == nil {
+		t.Fatalf("capped create failed\n%s", cbody)
+	}
+	cti, err := e.as.Verify(ctx, cm[1], nil)
+	if r := tools.RestrictionOf(cti); err != nil || r.MaxWritesPerHour != 5 || !r.DryRun {
+		t.Errorf("capped token: %+v %v", r, err)
+	}
 	if _, body := e.get(t, "/tokens", true); !strings.Contains(body, "atlas") || strings.Contains(body, m[1]) {
 		t.Error("list shows the token value or misses the name")
 	}
 
 	list, _ := e.as.Store.ListPersonalTokens(ctx, e.user.ID)
+	list = slices.DeleteFunc(list, func(p store.PersonalToken) bool { return p.Name != "atlas" })
 	if code, _ := e.post(t, "/tokens/"+list[0].ID+"/revoke", nil, "https://evil.example"); code != http.StatusForbidden {
 		t.Errorf("revoke foreign Origin: %d", code)
 	}

@@ -17,7 +17,7 @@ func TestPersonalToken(t *testing.T) {
 	ctx := context.Background()
 	u, _ := e.as.Store.UpsertUser(ctx, "rahmad@example.com")
 	scope := []byte(`{"bitbucket":"acme/web","jenkins":["deploy-web"]}`)
-	tok, err := e.as.CreatePersonalToken(ctx, u.ID, "atlas", []string{"jenkins_deploy"}, scope, 0)
+	tok, err := e.as.CreatePersonalToken(ctx, u.ID, NewToken{Name: "atlas", Tools: []string{"jenkins_deploy"}, Scope: scope})
 	if err != nil || !strings.HasPrefix(tok, PersonalTokenPrefix) {
 		t.Fatalf("create: %q %v", tok, err)
 	}
@@ -46,7 +46,7 @@ func TestPersonalTokenExpiry(t *testing.T) {
 	e := newEnv(t, nil)
 	ctx := context.Background()
 	u, _ := e.as.Store.UpsertUser(ctx, "rahmad@example.com")
-	tok, err := e.as.CreatePersonalToken(ctx, u.ID, "short", []string{"loki_query"}, nil, 30*24*time.Hour)
+	tok, err := e.as.CreatePersonalToken(ctx, u.ID, NewToken{Name: "short", Tools: []string{"loki_query"}, TTL: 30 * 24 * time.Hour})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -69,7 +69,7 @@ func TestCreatePersonalTokenValidates(t *testing.T) {
 		"no tools":  {"x", nil, `{}`},
 		"bad scope": {"x", []string{"loki_query"}, `{"jenkin":"a"}`},
 	} {
-		if _, err := e.as.CreatePersonalToken(ctx, u.ID, c.name, c.tools, []byte(c.scope), 0); err == nil {
+		if _, err := e.as.CreatePersonalToken(ctx, u.ID, NewToken{Name: c.name, Tools: c.tools, Scope: []byte(c.scope)}); err == nil {
 			t.Errorf("%s: accepted", name)
 		}
 	}

@@ -16,6 +16,9 @@ type Restriction struct {
 	Name    string // the token's name, for logs
 	Tools   []string
 	Scope   Scope
+
+	MaxWritesPerHour int  // 0 means unlimited
+	DryRun           bool // write tools report what they would do and never reach the upstream
 }
 
 // Allows reports whether the token may see and call tool at all.
