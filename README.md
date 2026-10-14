@@ -4,7 +4,7 @@ Every Tool. Your Rules.
 
 valetkey is a self-hosted MCP server that lets AI agents do operations work (open and merge pull requests, trigger deploys, wait for builds, read logs and metrics) inside limits you set. The name comes from a car's valet key: it starts the engine but does not open the trunk.
 
-A token does not only name the tools an agent may call. It names the resources those tools may reach: this repository, these Jenkins jobs, that log stream. Write tools refuse to act on stale state and hand back something to wait on. Each token has a write limit per hour and an optional dry run, and every call is logged, refused ones included.
+A token does not only name the tools an agent may call. It names the resources those tools may reach: this repository, these Jenkins jobs, that log stream. Write tools refuse to act on stale state and hand back something to wait on. Each token has a write limit per hour and an optional dry run, and every call to a tool on the token's list is logged, refused ones included.
 
 valetkey is not a general MCP gateway. If you want to put many MCP servers behind one front door, [Obot](https://github.com/obot-platform/obot), [Bifrost](https://github.com/maximhq/bifrost) and [IBM ContextForge](https://github.com/IBM/mcp-context-forge) do that. Choose valetkey when your concern is what an agent can reach and change in Jenkins, Argo CD, Loki, Prometheus and Bitbucket Cloud, and you want that written down per token.
 
@@ -38,6 +38,8 @@ claude mcp add --transport http valetkey https://valetkey.example.com/mcp
 The client opens a browser window for you to sign in and approve it. For a bot that cannot do that, create a personal access token instead (see [Personal access tokens](#personal-access-tokens)).
 
 Postgres instead of SQLite: [compose.yaml](compose.yaml) starts valetkey with a Postgres container. Run `docker compose up -d` next to a `.env` file.
+
+Without Docker: `go install github.com/rahmadafandi/valetkey/cmd/valetkey@latest` builds the binary with Go 1.26 or newer, no cgo needed. Set the same variables and run `valetkey`.
 
 ## Sign-in setup
 
@@ -129,13 +131,13 @@ refused: jenkins_deploy: job "deploy-api" is outside this token's scope; it allo
 refused: bitbucket_pr_merge: write limit of 20/hour reached for this token
 ```
 
-Every refusal is also recorded in the audit log.
+These refusals are also recorded in the audit log. A call to a tool that is not on the token's list is different: the MCP server that token sees does not list the tool, so the client gets a protocol error, the call never reaches valetkey's tool handler, and it is not in the audit log.
 
 ## Activity log and retention
 
-Every call that reaches a tool is recorded: refused calls, dry runs and upstream errors as well as successes. `/activity` lists the newest 200 calls with time, token, tool, outcome, message and arguments. Filter by token name, tool or outcome in the page. People see their own calls. Emails in `ADMIN_EMAILS` see everyone's and can also filter by the user's email. `/tokens` shows when each token was last used.
+Every call that reaches a tool handler is recorded: refused calls, dry runs and upstream errors as well as successes. `/activity` lists the newest 200 calls with time, token, tool, outcome, message and arguments. Filter by token name, tool or outcome in the page. People see their own calls. Emails in `ADMIN_EMAILS` see everyone's and can also filter by the user's email. `/tokens` shows when each token was last used.
 
-Arguments are stored cut to 4 KiB and messages to 1 KiB. Credentials are not tool arguments, so they do not reach the log.
+Arguments are stored cut to 4 KiB and messages to 1 KiB. Credentials are not tool arguments, so they do not reach the log. Jenkins build parameters are tool arguments, so they are stored as sent: do not pass secrets as build parameters.
 
 `AUDIT_RETENTION_DAYS` sets how long rows are kept, 90 by default. A cleanup runs every ten minutes. Use 0 to keep rows forever.
 
