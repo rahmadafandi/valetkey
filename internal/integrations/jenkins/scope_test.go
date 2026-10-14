@@ -46,6 +46,8 @@ func TestCheckScope(t *testing.T) {
 		"":                                                            false,
 		"https://jenkins.example.com/%6Aob/evil/job/deploy-web/":      false,
 		"https://jenkins.example.com/j%6Fb/evil/job/deploy-web/":      false,
+		"https://jenkins.example.com/JOB/evil/job/deploy-web/":        false,
+		"https://jenkins.example.com/Job/deploy-web/":                 false,
 		"https://jenkins.example.com/job/%2564eploy-web/":             false,
 		"https://jenkins.example.com/job/deploy-web%3F/":              false,
 	} {

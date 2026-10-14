@@ -47,8 +47,9 @@ func (l *Loki) CheckScope(scope any, tool string, args json.RawMessage) error {
 // streamSelectors is every {...} in a LogQL query, with the whitespace outside
 // its quoted values removed. Braces inside quoted strings (a line filter's
 // regex, a line_format template) are not selectors; an unclosed selector or
-// string makes the query unreadable, and so does a comment (#, // or /*),
-// which could hide a quote from this scanner but not from Loki.
+// string makes the query unreadable. Outside strings only the characters in
+// syntax are read: anything else (a ' char literal, a # comment, a \) or a
+// // or /* comment could hide a quote from this scanner but not from Loki.
 func streamSelectors(query string) ([]string, bool) {
 	var selectors []string
 	var current *strings.Builder
@@ -57,7 +58,7 @@ func streamSelectors(query string) ([]string, bool) {
 	slash := false
 	for _, r := range query {
 		if quote == 0 {
-			if slash && (r == '/' || r == '*') {
+			if !isSyntax(r) || slash && (r == '/' || r == '*') {
 				return nil, false
 			}
 			slash = r == '/'
@@ -77,8 +78,6 @@ func streamSelectors(query string) ([]string, bool) {
 			continue
 		}
 		switch {
-		case r == '#':
-			return nil, false
 		case r == '"' || r == '`':
 			quote = r
 		case r == '{' && current == nil:
@@ -96,4 +95,10 @@ func streamSelectors(query string) ([]string, bool) {
 		}
 	}
 	return selectors, quote == 0 && current == nil
+}
+
+const syntax = "{}()[]=!~|,+-*/%^<>.:_@\"`"
+
+func isSyntax(r rune) bool {
+	return r < unicode.MaxASCII && (unicode.IsLetter(r) || unicode.IsDigit(r) || unicode.IsSpace(r) || strings.ContainsRune(syntax, r))
 }

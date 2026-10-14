@@ -48,7 +48,8 @@ func (j *Jenkins) CheckScope(scope any, tool string, args json.RawMessage) error
 // "job" segment on must be job/<name> pairs. Segments are decoded first
 // because jobURL requests the decoded path. A segment that decodes to a dot
 // segment or to a character that would be read again as path syntax or an
-// escape is refused, so Jenkins resolves exactly the job checked here.
+// escape is refused, and so is "job" in any other case, so Jenkins resolves
+// exactly the job checked here.
 func jobPath(raw string) (string, bool) {
 	u, err := url.Parse(strings.TrimSpace(raw))
 	if err != nil {
@@ -57,7 +58,8 @@ func jobPath(raw string) (string, bool) {
 	var parts []string
 	for _, p := range strings.Split(strings.Trim(u.EscapedPath(), "/"), "/") {
 		seg, err := url.PathUnescape(p)
-		if err != nil || seg == "." || seg == ".." || strings.ContainsAny(seg, `;/\%?#`) {
+		if err != nil || seg == "." || seg == ".." || strings.ContainsAny(seg, `;/\%?#`) ||
+			strings.EqualFold(seg, "job") && seg != "job" {
 			return "", false
 		}
 		parts = append(parts, seg)
