@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"net/url"
 	"regexp"
 	"slices"
@@ -635,4 +637,87 @@ func (b bearerRT) RoundTrip(r *http.Request) (*http.Response, error) {
 	r = r.Clone(r.Context())
 	r.Header.Set("Authorization", "Bearer "+string(b))
 	return http.DefaultTransport.RoundTrip(r)
+}
+
+// internalLookup resolves *.internal.example to a private address, as an internal DNS name would.
+func internalLookup(ctx context.Context, host string) ([]netip.Addr, error) {
+	if strings.HasSuffix(host, ".internal.example") {
+		return []netip.Addr{netip.MustParseAddr("10.0.0.5")}, nil
+	}
+	return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+}
+
+const notPublic = "This address is not on the public internet, and whoever runs valetkey has not allowed it."
+
+func TestUpstreamErrorsHideAddresses(t *testing.T) {
+	e := newEnv(t)
+	check := func(name string, code int, body string) {
+		t.Helper()
+		if code != 400 || !strings.Contains(body, notPublic) || strings.Contains(body, "10.0.0.5") || strings.Contains(body, "internal.example: ") {
+			t.Errorf("%s: %d\n%s", name, code, body)
+		}
+	}
+	code, body := e.post(t, "/upstreams", url.Values{"name": {"db"}, "url": {"https://db.internal.example/"}, "auth": {"none"}}, e.url)
+	check("add, no sign-in", code, body)
+
+	resp, body := e.do(t, "POST", "/upstreams", url.Values{"name": {"wiki"}, "url": {"https://wiki.internal.example/mcp"}, "auth": {"token"}}, e.cookie)
+	id := strings.TrimPrefix(resp.Header.Get("Location"), "/upstreams/")
+	resp, body = e.do(t, "POST", "/upstreams/"+id+"/token", url.Values{"value": {"x"}}, e.cookie)
+	check("token", resp.StatusCode, body)
+
+	code, body = e.post(t, "/upstreams", url.Values{"name": {"sso"}, "url": {"https://sso.internal.example/mcp"}, "auth": {"oauth"}}, e.url)
+	check("OAuth start", code, body)
+
+	// An authorization server whose token endpoint is internal: the failure comes at the callback.
+	as := newASFake(t)
+	meta := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/.well-known/oauth-authorization-server" {
+			http.NotFound(w, r)
+			return
+		}
+		iss := "http://" + r.Host
+		json.NewEncoder(w).Encode(map[string]any{"issuer": iss, "authorization_endpoint": as.URL + "/authorize",
+			"token_endpoint": "https://token.internal.example/token", "registration_endpoint": as.URL + "/register",
+			"code_challenge_methods_supported": []string{"S256"}})
+	}))
+	t.Cleanup(meta.Close)
+	f := newMCPFake(t, &mcpFake{as: meta.URL, bearer: as.valid})
+	resp, _ = e.do(t, "POST", "/upstreams", url.Values{"name": {"notes"}, "url": {f.URL}, "auth": {"oauth"}}, e.cookie)
+	var nonce *http.Cookie
+	for _, c := range resp.Cookies() {
+		if c.Name == "vk_upstream_nonce" {
+			nonce = c
+		}
+	}
+	if resp.StatusCode != http.StatusFound || nonce == nil {
+		t.Fatalf("start: %d", resp.StatusCode)
+	}
+	resp, body = e.do(t, "GET", as.authorize(t, resp.Header.Get("Location")), nil, e.cookie, nonce)
+	check("OAuth callback", resp.StatusCode, body)
+}
+
+func TestCallbackErrorIsNotEchoed(t *testing.T) {
+	e := newEnv(t)
+	as := newASFake(t)
+	f := newMCPFake(t, &mcpFake{as: as.URL, bearer: as.valid})
+	for code, want := range map[string]string{
+		"access_denied":           "You cancelled the sign-in",
+		"<b>made-up</b>":          "The sign-in did not finish",
+		"temporarily_unavailable": "had a problem",
+	} {
+		resp, _ := e.do(t, "POST", "/upstreams", url.Values{"name": {fmt.Sprintf("n%d", len(want))}, "url": {f.URL}, "auth": {"oauth"}}, e.cookie)
+		var nonce *http.Cookie
+		for _, c := range resp.Cookies() {
+			if c.Name == "vk_upstream_nonce" {
+				nonce = c
+			}
+		}
+		u, _ := url.Parse(resp.Header.Get("Location"))
+		q := u.Query()
+		cb := q.Get("redirect_uri") + "?" + url.Values{"error": {code}, "state": {q.Get("state")}}.Encode()
+		resp, body := e.do(t, "GET", cb, nil, e.cookie, nonce)
+		if resp.StatusCode != 400 || !strings.Contains(body, want) || strings.Contains(body, "made-up") || strings.Contains(body, code+".") {
+			t.Errorf("%s: %d\n%s", code, resp.StatusCode, body)
+		}
+	}
 }

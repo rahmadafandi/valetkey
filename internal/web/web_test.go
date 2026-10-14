@@ -64,7 +64,7 @@ func newEnv(t *testing.T) *env {
 	pub := "http://" + ts.Listener.Addr().String()
 	as := &auth.Server{Store: st, Signer: auth.NewSigner([]byte(strings.Repeat("k", 32))), PublicURL: pub,
 		Integrations: []tools.Integration{fakeInt{}}}
-	guard := &netguard.Guard{AllowHosts: []string{"127.0.0.1"}}
+	guard := &netguard.Guard{AllowHosts: []string{"127.0.0.1"}, Lookup: internalLookup}
 	px := &proxy.Proxy{Store: st, Creds: cr, Guard: guard, PublicURL: pub, Log: slog.New(slog.DiscardHandler)}
 	h := &Web{Auth: as, Creds: cr, Integrations: []tools.Integration{fakeInt{}},
 		Catalog:   []CatalogEntry{{Name: "Example MCP", Description: "Inbox tools", Setup: "npx example-mcp"}},

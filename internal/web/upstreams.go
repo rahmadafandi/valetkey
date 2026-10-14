@@ -2,16 +2,19 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/rahmadafandi/valetkey/internal/netguard"
 	"github.com/rahmadafandi/valetkey/internal/proxy"
 	"github.com/rahmadafandi/valetkey/internal/store"
 	"github.com/rahmadafandi/valetkey/internal/tools"
@@ -242,7 +245,7 @@ func (h *Web) upstreamToken(w http.ResponseWriter, r *http.Request) {
 	c := tools.Creds{"header": header, "value": value}
 	cands, skipped, err := h.Proxy.Fetch(r.Context(), up, c)
 	if err != nil {
-		reject(fetchError(err))
+		reject(h.reason(u, up, "tool list", err))
 		return
 	}
 	if err := h.Creds.Save(r.Context(), u.ID, proxy.CredsSystem(up.ID), c); err != nil {
@@ -281,8 +284,7 @@ func (h *Web) startOAuth(w http.ResponseWriter, r *http.Request, u store.User, u
 		return
 	}
 	if err != nil {
-		h.Log.Warn("upstream sign-in not started", "user", u.Email, "upstream", up.ID, "err", err)
-		h.renderUpstream(w, r, u, up, map[string]any{"Error": "valetkey could not start the sign-in. Check the address, or try again later. Details: " + err.Error()}, http.StatusBadRequest)
+		h.renderUpstream(w, r, u, up, map[string]any{"Error": h.reason(u, up, "sign-in start", err)}, http.StatusBadRequest)
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: upstreamNonceCookie, Value: st.Nonce, Path: "/upstreams/",
@@ -315,18 +317,21 @@ func (h *Web) upstreamCallback(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{Name: upstreamNonceCookie, Path: "/upstreams/", MaxAge: -1})
 	if e := q.Get("error"); e != "" {
-		reject("The server's sign-in page sent you back without a login: " + e + ".")
+		h.Log.Warn("upstream sign-in refused", "user", u.Email, "upstream", up.ID, "error", e)
+		msg, ok := callbackErrors[e]
+		if !ok {
+			msg = "The sign-in did not finish. Start it again below."
+		}
+		reject(msg)
 		return
 	}
 	if err := h.Proxy.FinishOAuth(r.Context(), u.ID, up, q.Get("code")); err != nil {
-		h.Log.Warn("upstream sign-in failed", "user", u.Email, "upstream", up.ID, "err", err)
-		reject("valetkey could not finish the sign-in. Start it again below. Details: " + err.Error())
+		reject(h.reason(u, up, "sign-in finish", err))
 		return
 	}
 	h.Log.Info("upstream signed in", "user", u.Email, "upstream", up.ID, "auth", "oauth")
-	c, err := h.Proxy.Login(r.Context(), u.ID, up)
-	if err != nil {
-		h.fail(w, err)
+	c, ok := h.login(w, r, u, up)
+	if !ok {
 		return
 	}
 	h.review(w, r, u, up, c, "", http.StatusOK)
@@ -355,7 +360,7 @@ func (h *Web) approveUpstream(w http.ResponseWriter, r *http.Request) {
 	}
 	cands, skipped, err := h.Proxy.Fetch(r.Context(), up, c)
 	if err != nil {
-		h.renderUpstream(w, r, u, up, map[string]any{"Error": fetchError(err)}, http.StatusBadRequest)
+		h.renderUpstream(w, r, u, up, map[string]any{"Error": h.reason(u, up, "tool list", err)}, http.StatusBadRequest)
 		return
 	}
 	// Approve exactly the set the user was shown; anything else goes back for review.
@@ -395,24 +400,45 @@ func (h *Web) login(w http.ResponseWriter, r *http.Request, u store.User, up sto
 		h.renderUpstream(w, r, u, up, map[string]any{"Error": "Your login to this server has run out. Sign in again."}, http.StatusBadRequest)
 		return nil, false
 	case err != nil:
-		h.fail(w, err)
+		h.renderUpstream(w, r, u, up, map[string]any{"Error": h.reason(u, up, "login refresh", err)}, http.StatusBadRequest)
 		return nil, false
 	}
 	return c, true
 }
 
-func fetchError(err error) string {
-	if errors.Is(err, upstream.ErrUnauthorized) {
+// reason logs why talking to an upstream failed and returns a fixed sentence
+// for the page. The error itself stays in the log: it can name the address an
+// internal host resolves to.
+func (h *Web) reason(u store.User, up store.Upstream, what string, err error) string {
+	h.Log.Warn("upstream "+what+" failed", "user", u.Email, "upstream", up.ID, "err", err)
+	var netErr net.Error
+	switch {
+	case errors.Is(err, netguard.ErrNotPublic):
+		return "This address is not on the public internet, and whoever runs valetkey has not allowed it."
+	case errors.Is(err, upstream.ErrUnauthorized):
 		return "The server refused this login. Check it and try again."
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr):
+		return "valetkey could not reach the server. Check the address, or try again later."
 	}
-	return "valetkey could not get the server's tools. Check the address, or try again later. Details: " + err.Error()
+	return "valetkey could not talk to the server. Try again later, or check with whoever runs it."
+}
+
+// callbackErrors are the RFC 6749 section 4.1.2.1 codes, in plain words.
+var callbackErrors = map[string]string{
+	"access_denied":             "You cancelled the sign-in, so valetkey has no login for this server. Start it again below when you are ready.",
+	"invalid_request":           "The server's sign-in page refused the request from valetkey. Try again, or check with whoever runs the server.",
+	"unauthorized_client":       "The server's sign-in page refused the request from valetkey. Try again, or check with whoever runs the server.",
+	"unsupported_response_type": "The server's sign-in page refused the request from valetkey. Try again, or check with whoever runs the server.",
+	"invalid_scope":             "The server's sign-in page refused the request from valetkey. Try again, or check with whoever runs the server.",
+	"server_error":              "The server's sign-in page had a problem. Try again later.",
+	"temporarily_unavailable":   "The server's sign-in page had a problem. Try again later.",
 }
 
 // review fetches the server's tools with c and shows them for approval.
 func (h *Web) review(w http.ResponseWriter, r *http.Request, u store.User, up store.Upstream, c tools.Creds, errMsg string, status int) {
 	cands, skipped, err := h.Proxy.Fetch(r.Context(), up, c)
 	if err != nil {
-		h.renderUpstream(w, r, u, up, map[string]any{"Error": fetchError(err)}, http.StatusBadRequest)
+		h.renderUpstream(w, r, u, up, map[string]any{"Error": h.reason(u, up, "tool list", err)}, http.StatusBadRequest)
 		return
 	}
 	h.renderReview(w, r, u, up, cands, skipped, errMsg, status)
