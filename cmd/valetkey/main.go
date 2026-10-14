@@ -134,7 +134,7 @@ func buildHandler(cfg config.Config, st *store.Store, idp oauth2.Endpoint, log *
 	}
 	mux := http.NewServeMux()
 	as.Routes(mux)
-	mux.Handle("/mcp", tools.HTTPHandler(ints, cr.Load, cfg.PublicURL, log, st, as.Verify, as.ResourceMetadataURL()))
+	mux.Handle("/mcp", tools.HTTPHandler(ints, nil, cr.Load, cfg.PublicURL, log, st, as.Verify, as.ResourceMetadataURL()))
 	(&web.Web{Auth: as, Creds: cr, Integrations: ints, Catalog: catalog, AdminEmails: cfg.AdminEmails, PublicURL: cfg.PublicURL, Log: log}).Routes(mux)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	return mux, nil

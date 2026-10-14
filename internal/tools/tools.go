@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"slices"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -57,6 +58,9 @@ type Helper interface{ Help() []string }
 type Connector interface{ ConnectURL(publicURL string) string }
 
 type LoadCreds func(ctx context.Context, userID, system string) (Creds, error)
+
+// UserIntegrations returns the integrations only userID has, such as their own upstream MCP servers.
+type UserIntegrations func(ctx context.Context, userID string) ([]Integration, error)
 
 var ErrNotConnected = errors.New("not connected")
 
@@ -133,7 +137,9 @@ func handler(in Integration, t Tool, load LoadCreds, publicURL string, log *slog
 		case r != nil && !r.Allows(t.Name):
 			err = Refuse("%s: not allowed for this token", t.Name)
 		case r != nil:
-			err = r.Scope.Check(in, t.Name, req.Params.Arguments)
+			if !t.Unscoped {
+				err = r.Scope.Check(in, t.Name, req.Params.Arguments)
+			}
 			if err == nil && t.Destructive && r.MaxWritesPerHour > 0 && audit != nil {
 				// Held until the call is recorded, so parallel writes cannot all pass the same count.
 				unlock, lerr := lockWrites(ctx, r.TokenID)
@@ -280,18 +286,35 @@ func truncate(s string, max int) string {
 	return s[:cut] + fmt.Sprintf("\n[truncated: %d bytes omitted]", len(s)-cut)
 }
 
-// HTTPHandler serves srv over stateless Streamable HTTP behind bearer-token auth.
+// HTTPHandler serves the integrations over stateless Streamable HTTP behind bearer-token auth.
 // Unauthenticated requests get 401 with WWW-Authenticate pointing at resourceMetadataURL.
 // A personal access token gets a server holding only its allowed tools, so
-// tools/list shows just those.
-func HTTPHandler(ints []Integration, load LoadCreds, publicURL string, log *slog.Logger, audit Audit, verify mcpauth.TokenVerifier, resourceMetadataURL string) http.Handler {
-	full := NewServer(ints, load, publicURL, log, audit, nil)
+// tools/list shows just those. When user is not nil, each caller also gets the
+// integrations user returns for them, and nobody else's.
+func HTTPHandler(ints []Integration, user UserIntegrations, load LoadCreds, publicURL string, log *slog.Logger, audit Audit, verify mcpauth.TokenVerifier, resourceMetadataURL string) http.Handler {
+	var full *mcp.Server
+	if user == nil {
+		full = NewServer(ints, load, publicURL, log, audit, nil)
+	}
 	h := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
-		// ponytail: a restricted server is rebuilt per request; cache by token if this shows up in profiles.
-		if r := RestrictionOf(mcpauth.TokenInfoFromContext(req.Context())); r != nil {
-			return NewServer(ints, load, publicURL, log, audit, r)
+		// ponytail: the server is rebuilt per request; cache per user (invalidate on snapshot change) if this shows up in profiles.
+		ti := mcpauth.TokenInfoFromContext(req.Context())
+		r := RestrictionOf(ti)
+		if user == nil {
+			if r != nil {
+				return NewServer(ints, load, publicURL, log, audit, r)
+			}
+			return full
 		}
-		return full
+		var extra []Integration
+		if ti != nil && ti.UserID != "" {
+			var err error
+			if extra, err = user(req.Context(), ti.UserID); err != nil {
+				log.Error("load the user's integrations; serving native tools only", "user", ti.UserID, "err", err)
+				extra = nil
+			}
+		}
+		return NewServer(append(slices.Clip(ints), extra...), load, publicURL, log, audit, r)
 	},
 		// /mcp requires a bearer token and is never a local server, so the SDK's
 		// DNS-rebinding check (which 403s a non-localhost Host on a loopback

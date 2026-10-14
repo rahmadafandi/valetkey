@@ -128,7 +128,7 @@ func serveAudit(t *testing.T, audit Audit) string {
 		}
 		return nil, mcpauth.ErrInvalidToken
 	}
-	ts := httptest.NewServer(HTTPHandler([]Integration{fake{}}, load, "https://center.test", slog.New(slog.DiscardHandler), audit, verify, metaURL))
+	ts := httptest.NewServer(HTTPHandler([]Integration{fake{}}, nil, load, "https://center.test", slog.New(slog.DiscardHandler), audit, verify, metaURL))
 	t.Cleanup(ts.Close)
 	return ts.URL
 }
@@ -566,5 +566,125 @@ func TestNewServerSkipsToolTheSDKRefuses(t *testing.T) {
 	res, err := cs.ListTools(context.Background(), nil)
 	if err != nil || len(res.Tools) != 1 || res.Tools[0].Name != "bad_good" {
 		t.Fatalf("%v %+v", err, res)
+	}
+}
+
+// proxied stands in for a user's upstream MCP server: valetkey cannot read its
+// arguments, so it has no Scoper and its tools are Unscoped.
+type proxied struct{ ran *atomic.Int32 }
+
+func (proxied) System() string                        { return "upstream:p1" }
+func (proxied) Title() string                         { return "github" }
+func (proxied) Fields() []Field                       { return nil }
+func (proxied) Validate(context.Context, Creds) error { return nil }
+func (p proxied) Tools() []Tool {
+	return []Tool{{Name: "a__echo", Schema: Object(nil), Destructive: true, Unscoped: true,
+		Run: func(_ context.Context, _ Creds, raw json.RawMessage) (string, error) {
+			p.ran.Add(1)
+			return "upstream:" + string(raw), nil
+		}}}
+}
+
+func TestUnscopedToolGoesThroughTheFence(t *testing.T) {
+	var ran atomic.Int32
+	in := proxied{&ran}
+	tl := in.Tools()[0]
+	callAs := func(a *fakeAudit, r *Restriction) (string, bool) {
+		h := handler(in, tl, nil, "https://center.test", slog.New(slog.DiscardHandler), a)
+		res, err := h(context.Background(), &mcp.CallToolRequest{
+			Params: &mcp.CallToolParamsRaw{Name: tl.Name, Arguments: json.RawMessage(`{"q":1}`)},
+			Extra:  &mcp.RequestExtra{TokenInfo: &mcpauth.TokenInfo{UserID: "u1", Extra: map[string]any{RestrictionKey: r}}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.Content[0].(*mcp.TextContent).Text, res.IsError
+	}
+	allowed := func() *Restriction {
+		return &Restriction{TokenID: "tokp", Name: "bot", Tools: []string{tl.Name}, Scope: Scope{}, MaxWritesPerHour: 3}
+	}
+
+	a := &fakeAudit{}
+	if text, isErr := callAs(a, allowed()); isErr || text != `upstream:{"q":1}` || ran.Load() != 1 {
+		t.Errorf("allowed: %q isErr=%v ran=%d", text, isErr, ran.Load())
+	}
+	no := allowed()
+	no.Tools = []string{"something_else"}
+	if text, isErr := callAs(a, no); !isErr || text != "refused: a__echo: not allowed for this token" || ran.Load() != 1 {
+		t.Errorf("not allowed: %q isErr=%v ran=%d", text, isErr, ran.Load())
+	}
+	a.writes = 3
+	if text, isErr := callAs(a, allowed()); !isErr || !strings.Contains(text, "write limit of 3/hour reached") || ran.Load() != 1 {
+		t.Errorf("at the limit: %q isErr=%v ran=%d", text, isErr, ran.Load())
+	}
+	a.writes = 0
+	dry := allowed()
+	dry.DryRun = true
+	if text, isErr := callAs(a, dry); isErr || !strings.HasPrefix(text, "dry-run: would call a__echo with ") || ran.Load() != 1 {
+		t.Errorf("dry run: %q isErr=%v ran=%d", text, isErr, ran.Load())
+	}
+	var outcomes []string
+	for _, c := range a.calls {
+		if !c.IsWrite || c.Tool != tl.Name || c.TokenID != "tokp" {
+			t.Errorf("audit row = %+v", c)
+		}
+		outcomes = append(outcomes, c.Outcome)
+	}
+	if strings.Join(outcomes, ",") != "ok,refused,refused,dry_run" {
+		t.Errorf("audit outcomes = %v", outcomes)
+	}
+}
+
+// userTools is a test-only per-user integration source: u1 has an upstream, u2 none, u3 a broken store.
+func userTools(ran *atomic.Int32) UserIntegrations {
+	return func(_ context.Context, userID string) ([]Integration, error) {
+		switch userID {
+		case "u1":
+			return []Integration{proxied{ran}}, nil
+		case "u3":
+			return nil, errors.New("db down")
+		}
+		return nil, nil
+	}
+}
+
+func TestUserToolsAreServedOnlyToTheirOwner(t *testing.T) {
+	var ran atomic.Int32
+	load := func(context.Context, string, string) (Creds, error) { return Creds{"token": "x"}, nil }
+	verify := func(_ context.Context, tok string, _ *http.Request) (*mcpauth.TokenInfo, error) {
+		return &mcpauth.TokenInfo{UserID: map[string]string{"t1": "u1", "t2": "u2", "t3": "u3"}[tok], Expiration: time.Now().Add(time.Hour)}, nil
+	}
+	ts := httptest.NewServer(HTTPHandler([]Integration{fake{}}, userTools(&ran), load, "https://center.test", slog.New(slog.DiscardHandler), nil, verify, metaURL))
+	t.Cleanup(ts.Close)
+	names := func(cs *mcp.ClientSession) []string {
+		res, err := cs.ListTools(context.Background(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, tl := range res.Tools {
+			out = append(out, tl.Name)
+		}
+		return out
+	}
+
+	a, b, broken := connect(t, ts.URL, "t1"), connect(t, ts.URL, "t2"), connect(t, ts.URL, "t3")
+	if n := names(a); !slices.Contains(n, "a__echo") || !slices.Contains(n, "fake_echo") {
+		t.Errorf("A's tools/list = %v", n)
+	}
+	if n := names(b); slices.Contains(n, "a__echo") || !slices.Contains(n, "fake_echo") {
+		t.Errorf("B's tools/list = %v", n)
+	}
+	if n := names(broken); slices.Contains(n, "a__echo") || !slices.Contains(n, "fake_echo") {
+		t.Errorf("a failing user lookup should leave the native tools: %v", n)
+	}
+	if _, err := b.CallTool(context.Background(), &mcp.CallToolParams{Name: "a__echo"}); err == nil || !strings.Contains(err.Error(), "unknown tool") {
+		t.Errorf("B calling A's tool: err = %v", err)
+	}
+	if ran.Load() != 0 {
+		t.Errorf("B's call reached A's upstream %d times", ran.Load())
+	}
+	if text, isErr := call(t, a, "a__echo", nil); isErr || ran.Load() != 1 {
+		t.Errorf("A's call: %q isErr=%v", text, isErr)
 	}
 }
