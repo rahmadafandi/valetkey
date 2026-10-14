@@ -347,13 +347,13 @@ func (h *Web) activity(w http.ResponseWriter, r *http.Request) {
 	admin := slices.Contains(h.AdminEmails, u.Email)
 	f := store.CallFilter{UserID: u.ID, TokenName: q.Get("token"), Tool: q.Get("tool"), Outcome: q.Get("outcome"), Limit: 200}
 	if admin {
-		f.UserID = q.Get("user") // empty means everyone
+		f.UserID, f.Email = "", strings.ToLower(strings.TrimSpace(q.Get("user"))) // empty means everyone
 	}
 	calls, err := h.Auth.Store.ListCalls(r.Context(), f)
 	if err != nil {
 		h.fail(w, err)
 		return
 	}
-	filtered := f.TokenName != "" || f.Tool != "" || f.Outcome != "" || (admin && f.UserID != "")
+	filtered := f.TokenName != "" || f.Tool != "" || f.Outcome != "" || f.Email != ""
 	render(w, http.StatusOK, "activity", map[string]any{"Email": u.Email, "Calls": calls, "Admin": admin, "Filter": f, "Filtered": filtered})
 }

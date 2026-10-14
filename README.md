@@ -133,7 +133,7 @@ Every refusal is also recorded in the audit log.
 
 ## Activity log and retention
 
-Every call that reaches a tool is recorded: refused calls, dry runs and upstream errors as well as successes. `/activity` lists the newest 200 calls with time, token, tool, outcome, message and arguments. Filter by token name, tool or outcome in the page. People see their own calls. Emails in `ADMIN_EMAILS` see everyone's and can also filter by user. `/tokens` shows when each token was last used.
+Every call that reaches a tool is recorded: refused calls, dry runs and upstream errors as well as successes. `/activity` lists the newest 200 calls with time, token, tool, outcome, message and arguments. Filter by token name, tool or outcome in the page. People see their own calls. Emails in `ADMIN_EMAILS` see everyone's and can also filter by the user's email. `/tokens` shows when each token was last used.
 
 Arguments are stored cut to 4 KiB and messages to 1 KiB. Credentials are not tool arguments, so they do not reach the log.
 

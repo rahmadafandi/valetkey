@@ -274,7 +274,7 @@ func TestActivity(t *testing.T) {
 	if _, body := e.get(t, "/activity?outcome=refused", true); strings.Contains(body, "loki_query") {
 		t.Error("outcome filter ignored")
 	}
-	if _, body := e.get(t, "/activity?user="+other.ID, true); strings.Contains(body, "secret_tool") {
+	if _, body := e.get(t, "/activity?user="+other.Email, true); strings.Contains(body, "secret_tool") {
 		t.Error("a non-admin read another user's calls")
 	}
 	e.as.Store.RecordCall(ctx, store.ToolCall{UserID: other.ID, TokenName: "bobs-bot", Tool: "bob_only_tool", Outcome: "ok", Args: `{}`})
@@ -287,6 +287,9 @@ func TestActivity(t *testing.T) {
 	e.web.AdminEmails = []string{"rahmad@example.com"}
 	if _, body := e.get(t, "/activity", true); !strings.Contains(body, "secret_tool") || !strings.Contains(body, "bob@example.com") {
 		t.Error("admin does not see everyone's calls")
+	}
+	if _, body := e.get(t, "/activity?user=BOB@example.com", true); !strings.Contains(body, "secret_tool") || strings.Contains(body, "loki_query") || !strings.Contains(body, "User email") {
+		t.Error("admin email filter does not narrow to that user")
 	}
 }
 

@@ -224,6 +224,9 @@ func TestToolCalls(t *testing.T) {
 	if len(all) != 6 || all[0].Email != "b@example.com" {
 		t.Errorf("ListCalls all: %d", len(all))
 	}
+	if byEmail, _ := s.ListCalls(ctx, CallFilter{Email: "b@example.com", Limit: 200}); len(byEmail) != 1 || byEmail[0].Tool != "loki_query" {
+		t.Errorf("email filter: %+v", byEmail)
+	}
 	refused, _ := s.ListCalls(ctx, CallFilter{UserID: u.ID, Outcome: "refused", Limit: 200})
 	if len(refused) != 1 {
 		t.Errorf("outcome filter: %d", len(refused))

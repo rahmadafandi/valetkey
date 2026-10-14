@@ -200,7 +200,7 @@
       <option value="">Any</option>
       {{range $o := (list "ok" "error" "refused" "dry_run")}}<option value="{{$o}}" {{if eq $o $.Filter.Outcome}}selected{{end}}>{{$o}}</option>{{end}}
     </select></div>
-    {{if .Admin}}<div><label for="f-user">User id</label><input id="f-user" name="user" value="{{.Filter.UserID}}" autocomplete="off" class="mono"></div>{{end}}
+    {{if .Admin}}<div><label for="f-user">User email</label><input id="f-user" name="user" type="email" value="{{.Filter.Email}}" autocomplete="off"></div>{{end}}
     <button class="btn" type="submit">Filter</button>
   </form>
   {{if .Calls}}<p class="meta">Showing the latest {{len .Calls}}, newest first.</p>{{end}}

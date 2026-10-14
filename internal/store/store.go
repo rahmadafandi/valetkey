@@ -101,8 +101,8 @@ type ToolCall struct {
 }
 
 type CallFilter struct {
-	UserID, TokenName, Tool, Outcome string // empty means any
-	Limit                            int
+	UserID, Email, TokenName, Tool, Outcome string // empty means any
+	Limit                                   int
 }
 
 // Open connects to url (sqlite://path or postgres://...) and applies pending migrations.
@@ -366,7 +366,7 @@ func (s *Store) ListCalls(ctx context.Context, f CallFilter) ([]ToolCall, error)
 	var calls []ToolCall
 	q := s.db.NewSelect().Model(&calls).ColumnExpr("tc.*").ColumnExpr("u.email").
 		Join("JOIN users AS u ON u.id = tc.user_id").OrderExpr("tc.at DESC").Limit(int64(f.Limit))
-	for col, v := range map[string]string{"tc.user_id": f.UserID, "tc.token_name": f.TokenName, "tc.tool": f.Tool, "tc.outcome": f.Outcome} {
+	for col, v := range map[string]string{"tc.user_id": f.UserID, "u.email": f.Email, "tc.token_name": f.TokenName, "tc.tool": f.Tool, "tc.outcome": f.Outcome} {
 		if v != "" {
 			q = q.Where("? = ?", bun.Ident(col), v)
 		}
