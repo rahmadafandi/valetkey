@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/rahmadafandi/valetkey/internal/version"
@@ -29,6 +30,9 @@ var (
 type Guard struct {
 	AllowHosts []string // exact lowercase host names that skip the address check and may use http
 	Lookup     func(ctx context.Context, host string) ([]netip.Addr, error)
+
+	once      sync.Once
+	transport http.RoundTripper // shared by every Client, so idle connections are reused
 }
 
 var notPublic = []netip.Prefix{
@@ -177,17 +181,20 @@ func (t capTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 }
 
 // Client is an HTTP client that only reaches public addresses and allowed hosts.
+// Callers may change its CheckRedirect; the transport is shared.
 func (g *Guard) Client() *http.Client {
-	t := &http.Transport{
-		Proxy:                 nil,
-		DialContext:           g.dial,
-		ForceAttemptHTTP2:     true,
-		TLSHandshakeTimeout:   10 * time.Second,
-		ResponseHeaderTimeout: 60 * time.Second,
-		IdleConnTimeout:       90 * time.Second,
-	}
+	g.once.Do(func() {
+		g.transport = version.Transport(capTransport{&http.Transport{
+			Proxy:                 nil,
+			DialContext:           g.dial,
+			ForceAttemptHTTP2:     true,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ResponseHeaderTimeout: 60 * time.Second,
+			IdleConnTimeout:       90 * time.Second,
+		}})
+	})
 	return &http.Client{
-		Transport: version.Transport(capTransport{t}),
+		Transport: g.transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) > 3 {
 				return errors.New("netguard: too many redirects")

@@ -434,3 +434,15 @@ func TestDialHasOneDeadline(t *testing.T) {
 		t.Fatalf("tried %d addresses: %v", len(tried), tried)
 	}
 }
+
+// One transport per Guard, so idle connections are reused rather than piling up per client.
+func TestClientsShareTransport(t *testing.T) {
+	g := &Guard{}
+	a, b := g.Client(), g.Client()
+	if a == b || a.Transport != b.Transport {
+		t.Fatal("two clients from one Guard do not share a transport")
+	}
+	if (&Guard{}).Client().Transport == a.Transport {
+		t.Fatal("two Guards share a transport")
+	}
+}
