@@ -37,6 +37,10 @@ Refusals use `tools.Refuse`, which produces `refused: <tool>: <reason>`. Agents 
 5. Add the two variables to `.env.example` and the README tables.
 6. Test scope checks with queries and arguments built to slip past them, not only the happy path.
 
+## Releases
+
+Pushing a `v*` tag builds the image and pushes it to `ghcr.io`. After the first push, make the GHCR package public once in its package settings on GitHub, or `docker pull` will ask for credentials.
+
 ## Commits
 
 One logical change per commit, with a subject in the form `type(scope): what changed`, for example `feat(tools): limit personal access tokens to their tools`. Write commit messages, comments, docs and identifiers in English.
