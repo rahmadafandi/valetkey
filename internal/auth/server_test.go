@@ -380,8 +380,22 @@ func TestConsentPageEscapesClientName(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&out)
 	resp.Body.Close()
 	page := string(e.consentPage(t, browser(), out["client_id"].(string), redirect))
-	if strings.Contains(page, "<script>") || !strings.Contains(page, "&lt;script&gt;") || !strings.Contains(page, "https://claude.ai") {
+	if strings.Contains(page, "<script>alert(1)") || !strings.Contains(page, "&lt;script&gt;") || !strings.Contains(page, "https://claude.ai") {
 		t.Errorf("page = %s", page)
+	}
+}
+
+func TestConsentPageHasThemeToggle(t *testing.T) {
+	e := newEnv(t, claims("a@example.com"))
+	const redirect = "https://claude.ai/cb"
+	page := string(e.consentPage(t, browser(), e.register(t, redirect), redirect))
+	for _, want := range []string{"data-theme-toggle", `value="approve">Approve</button>`, `value="deny">Deny</button>`} {
+		if !strings.Contains(page, want) {
+			t.Errorf("consent page misses %q", want)
+		}
+	}
+	if strings.Contains(page, "\u2014") {
+		t.Error("consent page contains an em dash")
 	}
 }
 

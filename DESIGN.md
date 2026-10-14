@@ -3,6 +3,13 @@
 Owner's answers, transcribed. Applies to every page valetkey serves
 (sign-in, home, connect, tokens, activity, consent).
 
+## Tagline
+
+Every Tool. Your Rules.
+
+Owner's words, used verbatim: the sign-in headline, the README's first line
+under the title, and the page title where a tagline fits.
+
 ## Personality
 
 Warm and friendly. A person who does not work in ops should understand every

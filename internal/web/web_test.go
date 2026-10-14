@@ -111,7 +111,8 @@ func (e *env) post(t *testing.T, path string, form url.Values, origin string) (i
 
 func TestHome(t *testing.T) {
 	e := newEnv(t)
-	if code, body := e.get(t, "/", false); code != 200 || !strings.Contains(body, "Sign in with Google") {
+	if code, body := e.get(t, "/", false); code != 200 || !strings.Contains(body, "<h1>Every Tool. Your Rules.</h1>") ||
+		!strings.Contains(body, `href="/login">Sign in</a>`) || strings.Contains(body, "Google") {
 		t.Errorf("signed out: %d", code)
 	}
 	code, body := e.get(t, "/", true)
@@ -178,7 +179,7 @@ func TestTokens(t *testing.T) {
 	if code, _ := e.get(t, "/tokens", false); code != http.StatusFound {
 		t.Errorf("signed out: %d", code)
 	}
-	if code, body := e.get(t, "/tokens", true); code != 200 || !strings.Contains(body, "No tokens yet.") || !strings.Contains(body, `value="jenkins_deploy"`) {
+	if code, body := e.get(t, "/tokens", true); code != 200 || !strings.Contains(body, "No tokens yet. Create one below when a bot needs to reach valetkey.") || !strings.Contains(body, `value="jenkins_deploy"`) {
 		t.Errorf("empty page: %d", code)
 	}
 	good := url.Values{"name": {"atlas"}, "tools": {"loki_query", "jenkins_deploy"}, "scope": {`{"fake":"x"}`}, "expiry": {"30"}}
@@ -194,7 +195,7 @@ func TestTokens(t *testing.T) {
 		"not a number": {"name": {"x"}, "tools": {"loki_query"}, "expiry": {"30"}, "max_writes": {"abc"}},
 		"too many":     {"name": {"x"}, "tools": {"loki_query"}, "expiry": {"30"}, "max_writes": {"1001"}},
 	} {
-		if code, body := e.post(t, "/tokens", form, e.url); code != 400 || !strings.Contains(body, `class="error"`) {
+		if code, body := e.post(t, "/tokens", form, e.url); code != 400 || !strings.Contains(body, `class="error" role="alert"`) {
 			t.Errorf("%s: %d", name, code)
 		}
 	}
@@ -203,7 +204,7 @@ func TestTokens(t *testing.T) {
 	}
 
 	code, body := e.post(t, "/tokens", good, e.url)
-	m := regexp.MustCompile(`<pre>(vk_[A-Z0-9]+)</pre>`).FindStringSubmatch(body)
+	m := regexp.MustCompile(`<pre class="key">(vk_[A-Z0-9]+)</pre>`).FindStringSubmatch(body)
 	if code != 200 || m == nil || !strings.Contains(body, "Authorization: Bearer "+m[1]) {
 		t.Fatalf("create: %d\n%s", code, body)
 	}
@@ -216,7 +217,7 @@ func TestTokens(t *testing.T) {
 	}
 	capped := url.Values{"name": {"capped"}, "tools": {"jenkins_deploy"}, "expiry": {"30"}, "max_writes": {"5"}, "dry_run": {"on"}}
 	_, cbody := e.post(t, "/tokens", capped, e.url)
-	cm := regexp.MustCompile(`<pre>(vk_[A-Z0-9]+)</pre>`).FindStringSubmatch(cbody)
+	cm := regexp.MustCompile(`<pre class="key">(vk_[A-Z0-9]+)</pre>`).FindStringSubmatch(cbody)
 	if cm == nil {
 		t.Fatalf("capped create failed\n%s", cbody)
 	}
@@ -296,5 +297,43 @@ func TestTokenRowShowsDryRunWithLimit(t *testing.T) {
 	}
 	if _, body := e.get(t, "/tokens", true); !strings.Contains(body, "dry run · 20 writes/hour") {
 		t.Error("dry run row does not show the write limit")
+	}
+}
+
+func TestEmptyActivity(t *testing.T) {
+	e := newEnv(t)
+	if _, body := e.get(t, "/activity", true); !strings.Contains(body, "No tool calls yet. When an agent uses one of your connections, the call shows up here.") {
+		t.Error("empty state missing")
+	}
+}
+
+func TestWriteToolBadgeIsNotAnError(t *testing.T) {
+	e := newEnv(t)
+	_, body := e.get(t, "/tokens", true)
+	if !strings.Contains(body, `<span class="writes">changes things</span>`) || strings.Contains(body, `class="error"`) {
+		t.Error("the write-tool badge should have its own class, and a clean page has no error")
+	}
+}
+
+// Every localStorage access must sit inside a try block: it throws in private
+// windows and when site data is blocked.
+var storageInTry = regexp.MustCompile(`try\{[^}]*localStorage[^}]*\}catch`)
+
+func TestEveryPageHasThemeToggle(t *testing.T) {
+	e := newEnv(t)
+	for _, p := range []struct {
+		path     string
+		signedIn bool
+	}{{"/", false}, {"/", true}, {"/connect/fake", true}, {"/tokens", true}, {"/activity", true}} {
+		code, body := e.get(t, p.path, p.signedIn)
+		if code != 200 || !strings.Contains(body, "data-theme-toggle") {
+			t.Errorf("%s (signed in %v): no theme toggle (status %d)", p.path, p.signedIn, code)
+		}
+		if strings.Contains(body, "\u2014") {
+			t.Errorf("%s (signed in %v): contains an em dash", p.path, p.signedIn)
+		}
+		if n := strings.Count(body, "localStorage"); n == 0 || len(storageInTry.FindAllString(body, -1)) != n {
+			t.Errorf("%s (signed in %v): localStorage used outside try/catch", p.path, p.signedIn)
+		}
 	}
 }

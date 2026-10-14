@@ -22,12 +22,20 @@ import (
 	"github.com/rahmadafandi/valetkey/internal/creds"
 	"github.com/rahmadafandi/valetkey/internal/store"
 	"github.com/rahmadafandi/valetkey/internal/tools"
+	"github.com/rahmadafandi/valetkey/internal/ui"
 )
 
 //go:embed templates.html
 var templatesHTML string
 
-var tmpl = template.Must(template.New("").Funcs(template.FuncMap{"list": func(v ...string) []string { return v }}).Parse(templatesHTML))
+var tmpl = template.Must(template.New("").Funcs(template.FuncMap{
+	"list": func(v ...string) []string { return v },
+	"head": func() template.HTML { return ui.Head },
+	// page carries what the shared header needs; here marks the current nav item.
+	"page": func(title, email, here string) map[string]string {
+		return map[string]string{"Title": title, "Email": email, "Here": here}
+	},
+}).Parse(templatesHTML))
 
 type CatalogEntry struct {
 	Name        string `json:"name"`
@@ -133,7 +141,7 @@ func (h *Web) renderConnect(w http.ResponseWriter, r *http.Request, u store.User
 	}
 	render(w, status, "connect", map[string]any{
 		"Title": in.Title(), "System": in.System(), "Fields": in.Fields(),
-		"Connected": connected[in.System()], "Error": errMsg, "Help": help,
+		"Connected": connected[in.System()], "Error": errMsg, "Help": help, "Email": u.Email,
 	})
 }
 
@@ -286,7 +294,7 @@ func (h *Web) createToken(w http.ResponseWriter, r *http.Request) {
 	}
 	h.Log.Info("personal token created", "user", u.Email, "name", name, "tools", picked)
 	w.Header().Set("Cache-Control", "no-store")
-	render(w, http.StatusOK, "token_created", map[string]any{"Name": name, "Token": token, "MCPURL": h.PublicURL + "/mcp"})
+	render(w, http.StatusOK, "token_created", map[string]any{"Name": name, "Token": token, "MCPURL": h.PublicURL + "/mcp", "Email": u.Email})
 }
 
 func (h *Web) revokeToken(w http.ResponseWriter, r *http.Request) {
@@ -314,7 +322,7 @@ func (h *Web) revokeToken(w http.ResponseWriter, r *http.Request) {
 
 func (h *Web) fail(w http.ResponseWriter, err error) {
 	h.Log.Error("web request failed", "err", err)
-	http.Error(w, "internal error", http.StatusInternalServerError)
+	render(w, http.StatusInternalServerError, "error", nil)
 }
 
 func render(w http.ResponseWriter, status int, name string, data any) {

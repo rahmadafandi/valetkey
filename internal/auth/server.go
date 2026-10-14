@@ -23,6 +23,7 @@ import (
 
 	"github.com/rahmadafandi/valetkey/internal/store"
 	"github.com/rahmadafandi/valetkey/internal/tools"
+	"github.com/rahmadafandi/valetkey/internal/ui"
 )
 
 type Server struct {
@@ -296,20 +297,30 @@ type consentPayload struct {
 	State       string `json:"s"`
 }
 
-var consentTmpl = template.Must(template.New("consent").Parse(`<!doctype html>
-<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Authorize access</title>
-<style>body{font-family:system-ui,sans-serif;max-width:30rem;margin:4rem auto;padding:0 1rem}
-.host{font-size:1.25rem;font-weight:700;word-break:break-all}button{padding:.6rem 1.2rem;margin-right:.5rem}</style></head>
-<body><h1>Authorize access</h1>
-<p><strong>{{.Name}}</strong> wants to use valetkey as <strong>{{.Email}}</strong>.</p>
-<p>After you approve, you will be sent to:</p>
-<p class="host">{{.Host}}</p>
-<form method="post" action="/oauth/consent">
+var consentTmpl = template.Must(template.New("consent").Funcs(template.FuncMap{"head": func() template.HTML { return ui.Head }}).Parse(`<!doctype html>
+<html lang="en"><head>
+{{head}}
+<title>Allow access · valetkey</title>
+</head>
+<body><div class="wrap">
+<div class="bar">
+  <span class="mark">valetkey</span>
+  <button class="btn small" type="button" data-theme-toggle hidden>Switch to dark</button>
+</div>
+<main>
+<h1>Let {{.Name}} use valetkey?</h1>
+<p class="lead">It will act as <strong>{{.Email}}</strong>, with the tools you have connected here. Every call it makes shows up on your activity page.</p>
+<div class="card">
+<p>If you allow it, valetkey sends you back to:</p>
+<pre>{{.Host}}</pre>
+<form method="post" action="/oauth/consent" class="actions">
 <input type="hidden" name="consent" value="{{.Consent}}">
-<button type="submit" name="action" value="approve">Approve</button>
-<button type="submit" name="action" value="deny">Deny</button>
-</form></body></html>`))
+<button class="btn primary" type="submit" name="action" value="approve">Approve</button>
+<button class="btn" type="submit" name="action" value="deny">Deny</button>
+</form>
+<p class="muted">Did not start this yourself? Choose Deny.</p>
+</div>
+</main></div></body></html>`))
 
 // consent finishes the MCP flow once the signed-in user approves or denies.
 func (s *Server) consent(w http.ResponseWriter, r *http.Request) {

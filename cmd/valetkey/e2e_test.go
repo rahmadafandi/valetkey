@@ -157,7 +157,7 @@ func TestEndToEnd(t *testing.T) {
 	}
 	page, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	m := regexp.MustCompile(`<pre>(vk_[A-Z0-9]+)</pre>`).FindSubmatch(page)
+	m := regexp.MustCompile(`<pre class="key">(vk_[A-Z0-9]+)</pre>`).FindSubmatch(page)
 	if resp.StatusCode != 200 || m == nil {
 		t.Fatalf("create token: %d", resp.StatusCode)
 	}

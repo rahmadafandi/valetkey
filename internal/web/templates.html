@@ -1,207 +1,221 @@
 {{define "top"}}<!doctype html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>valetkey</title>
-<style>
-:root{--bg:#f6f8f9;--card:#fff;--text:#16202a;--muted:#5b6874;--line:#e2e7eb;--accent:#12a89d;--danger:#c0392b;--ok-bg:#e8f3ec;--ok-fg:#1d5a33;--bad-bg:#fde8e8;--bad-fg:#8a1f14;--dry-bg:#eceff2;--dry-fg:#2d3a45}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1417;--card:#172026;--text:#e6edf1;--muted:#93a1ad;--line:#26323a;--danger:#f5b5ad;--ok-bg:#1d3326;--ok-fg:#a9dfbd;--bad-bg:#3a1d1a;--bad-fg:#f5b5ad;--dry-bg:#26323a;--dry-fg:#cbd5dc}}
-*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,sans-serif}
-main{max-width:860px;margin:0 auto;padding:32px 16px}
-header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:24px}
-h1{font-size:22px;margin:0}h2{font-size:17px;margin:0 0 12px}
-.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
-.muted{color:var(--muted)}a{color:var(--accent)}
-pre{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;overflow-x:auto;white-space:pre-wrap;word-break:break-all}
-.row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
-.row:first-of-type{border-top:0}
-.ok{color:var(--accent);font-weight:600}.no{color:var(--muted)}
-.btn{display:inline-block;background:var(--accent);color:#fff;border:0;border-radius:10px;padding:9px 16px;font:inherit;cursor:pointer;text-decoration:none}
-.btn.ghost{background:transparent;color:var(--danger);border:1px solid var(--line)}
-label{display:block;margin:12px 0 4px;font-weight:600}
-input{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:inherit}
-:focus-visible{outline:2px solid var(--text);outline-offset:2px}
-.filters{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:8px}
-.filters div{flex:1 1 160px;min-width:0}.filters label{margin:0 0 4px}
-.filters input,.filters select,.filters .btn{min-height:44px}
-.filters select{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:inherit}
-.row.call{display:block;overflow-wrap:anywhere}
-.row.call summary{cursor:pointer;min-height:44px;display:flex;align-items:center}
-.outcome{padding:1px 8px;border-radius:6px;font-size:13px;font-weight:600;background:var(--dry-bg);color:var(--dry-fg)}
-.outcome.ok{background:var(--ok-bg);color:var(--ok-fg)}
-.outcome.refused,.outcome.error{background:var(--bad-bg);color:var(--bad-fg)}
-.error{background:rgba(192,57,43,.1);color:var(--danger);border-radius:10px;padding:10px 12px}
-</style>
+{{head}}
+<title>{{if .Title}}{{.Title}} · valetkey{{else}}valetkey: Every Tool. Your Rules.{{end}}</title>
 </head>
-<body><main>{{end}}
-
-{{define "bottom"}}</main></body></html>{{end}}
-
-{{define "signin"}}{{template "top"}}
-<div class="card" style="text-align:center;padding:48px 20px">
-  <h1>valetkey</h1>
-  <p class="muted">A fence for AI agents doing ops work. Sign in to connect your tools and issue scoped tokens.</p>
-  <a class="btn" href="/login">Sign in with Google</a>
+<body><div class="wrap">
+<div class="bar">
+  <a class="mark" href="/">valetkey</a>
+  <button class="btn small" type="button" data-theme-toggle hidden>Switch to dark</button>
 </div>
+{{if .Email}}<nav class="nav" aria-label="Pages">
+  <a href="/"{{if eq .Here "home"}} aria-current="page"{{end}}>Home</a>
+  <a href="/tokens"{{if eq .Here "tokens"}} aria-current="page"{{end}}>Tokens</a>
+  <a href="/activity"{{if eq .Here "activity"}} aria-current="page"{{end}}>Activity</a>
+  <span class="who">{{.Email}}</span>
+  <a href="/logout">Sign out</a>
+</nav>{{end}}
+<main>{{end}}
+
+{{define "bottom"}}</main></div></body></html>{{end}}
+
+{{define "signin"}}{{template "top" (page "" "" "")}}
+<section class="hero">
+  <h1>Every Tool. Your Rules.</h1>
+  <p>valetkey stands between your AI agents and the tools your team runs on. You choose which tools an agent may use and how far it may go, and every call it makes is written down for you to read.</p>
+  <a class="btn primary" href="/login">Sign in</a>
+</section>
 {{template "bottom"}}{{end}}
 
-{{define "home"}}{{template "top"}}
-<header><h1>valetkey</h1><span class="muted">{{.Email}} · <a href="/logout">Sign out</a></span></header>
+{{define "error"}}{{template "top" (page "Something went wrong" "" "")}}
+<h1>Something went wrong</h1>
+<p class="lead">valetkey could not finish loading this page. Try again in a moment. If it keeps happening, the server log says what failed.</p>
+<p><a class="btn" href="/">Back to home</a></p>
+{{template "bottom"}}{{end}}
 
-<div class="card">
-  <h2>Connect your client</h2>
-  <p class="muted">Add this URL as a remote MCP server (Streamable HTTP). Your client opens a Google sign-in the first time.</p>
+{{define "home"}}{{template "top" (page "Home" .Email "home")}}
+<h1>Hello</h1>
+<p class="lead">Connect your tools once here. Then any AI client you add can use them, only in the ways you allow.</p>
+
+<section class="card" aria-labelledby="client-h">
+  <h2 id="client-h">Add valetkey to your AI client</h2>
+  <p class="muted">Add this address as a remote MCP server. The first time, your client asks you to sign in here.</p>
   <pre>{{.MCPURL}}</pre>
-  <p><strong>Claude Code</strong></p>
+  <p><strong>Claude Code</strong>: run</p>
   <pre>claude mcp add --transport http valetkey {{.MCPURL}}</pre>
-  <p><strong>Claude Desktop / claude.ai</strong>: Settings → Connectors → Add custom connector → paste the URL.</p>
-  <p><strong>Cursor</strong> (<code>~/.cursor/mcp.json</code>)</p>
+  <p><strong>Claude Desktop or claude.ai</strong>: open Settings, then Connectors, choose Add custom connector and paste the address.</p>
+  <p><strong>Cursor</strong>: add this to <code>~/.cursor/mcp.json</code></p>
   <pre>{"mcpServers": {"valetkey": {"url": "{{.MCPURL}}"}}}</pre>
-  <p class="muted">Other clients (ChatGPT, internal agents): add the URL as a remote MCP server with OAuth.</p>
-</div>
+  <p class="muted">Any other client that speaks MCP with OAuth works the same way: give it the address above.</p>
+</section>
 
-<div class="card">
-  <h2>Your connections</h2>
+<section class="card" aria-labelledby="conn-h">
+  <h2 id="conn-h">Your connections</h2>
+  <p class="muted">valetkey uses these to act for you. Each one is checked before it is saved, then stored encrypted.</p>
+  <ul class="rows">
   {{range .Systems}}
-  <div class="row">
-    <span>{{.Title}} · {{if .Connected}}<span class="ok">Connected</span>{{else}}<span class="no">Not connected</span>{{end}}</span>
-    <a href="/connect/{{.System}}">{{if .Connected}}Manage{{else}}Connect{{end}}</a>
-  </div>
-  {{else}}<p class="muted">No systems are enabled on this server.</p>{{end}}
-</div>
+    <li>
+      <span class="what">{{.Title}}: {{if .Connected}}<span class="state on">Connected</span>{{else}}<span class="state">Not connected</span>{{end}}</span>
+      <a class="btn small{{if not .Connected}} primary{{end}}" href="/connect/{{.System}}">{{if .Connected}}Manage {{.Title}}{{else}}Connect {{.Title}}{{end}}</a>
+    </li>
+  {{else}}
+    <li class="muted">No tools are switched on for this server yet. Ask whoever runs valetkey to turn one on.</li>
+  {{end}}
+  </ul>
+</section>
 
-<div class="card">
-  <h2>Personal access tokens</h2>
-  <p class="muted">Static bearer tokens for headless bots that cannot do OAuth. Each one is limited to the tools and the jobs, repositories and logs you pick.</p>
-  <a href="/tokens">Manage tokens</a>
-</div>
+<section class="card" aria-labelledby="tok-h">
+  <h2 id="tok-h">Tokens for bots</h2>
+  <p class="muted">For scripts and bots that cannot sign in through a browser. Each token reaches only the tools and the jobs, repositories or logs you pick.</p>
+  <p><a href="/tokens">Manage your tokens</a></p>
+</section>
 
-<div class="card">
-  <h2>Activity</h2>
-  <p class="muted">Every tool call made with your connections, and the ones that were refused.</p>
-  <a href="/activity">See activity</a>
-</div>
+<section class="card" aria-labelledby="act-h">
+  <h2 id="act-h">Activity</h2>
+  <p class="muted">Every tool call made with your connections, including the ones valetkey refused.</p>
+  <p><a href="/activity">See what your agents did</a></p>
+</section>
 
 {{if .Catalog}}
-<div class="card">
-  <h2>Catalog</h2>
+<section class="card" aria-labelledby="cat-h">
+  <h2 id="cat-h">Other MCP servers</h2>
+  <p class="muted">Servers your team listed here. valetkey does not run these; set them up in your client yourself.</p>
+  <ul class="rows">
   {{range .Catalog}}
-  <div class="row" style="display:block">
-    <strong>{{.Name}}</strong> <span class="muted">{{.Description}}</span>
-    {{if .Setup}}<pre>{{.Setup}}</pre>{{end}}
-  </div>
+    <li class="call"><strong>{{.Name}}</strong> <span class="muted">{{.Description}}</span>
+    {{if .Setup}}<pre>{{.Setup}}</pre>{{end}}</li>
   {{end}}
-</div>
+  </ul>
+</section>
 {{end}}
 {{template "bottom"}}{{end}}
 
-{{define "connect"}}{{template "top"}}
-<header><h1>Connect {{.Title}}</h1><a href="/">← Back</a></header>
+{{define "connect"}}{{template "top" (page (printf "Connect %s" .Title) .Email "home")}}
+<h1>Connect {{.Title}}</h1>
+<p class="lead">valetkey checks these with {{.Title}} before saving them, then stores them encrypted. Only your own tool calls use them.</p>
 <div class="card">
-  {{if .Connected}}<p class="ok">Connected. Submit again to replace your credentials.</p>{{end}}
-  {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+  {{if .Connected}}<p class="notice">Connected. To replace these credentials, fill in the form again.</p>{{end}}
+  {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
   <form method="post" action="/connect/{{.System}}">
     {{range .Fields}}
     <label for="{{.Name}}">{{.Label}}{{if .Optional}} <span class="muted">(optional)</span>{{end}}</label>
     <input id="{{.Name}}" type="{{if .Secret}}password{{else}}text{{end}}" name="{{.Name}}" autocomplete="off">
     {{end}}
-    <p><button class="btn" type="submit" name="action" value="save">Verify and save</button></p>
+    <div class="actions">
+      <button class="btn primary" type="submit" name="action" value="save" data-busy="Checking with {{.Title}}…">Verify and save</button>
+    </div>
   </form>
   {{if .Connected}}
-  <form method="post" action="/connect/{{.System}}">
-    <button class="btn ghost" type="submit" name="action" value="disconnect">Disconnect</button>
+  <form method="post" action="/connect/{{.System}}" class="actions">
+    <button class="btn danger" type="submit" name="action" value="disconnect" data-confirm="Disconnect {{.Title}}? Your agents lose access to it until you connect again.">Disconnect {{.Title}}</button>
   </form>
   {{end}}
-  {{if .Help}}
-  <h2 style="margin-top:20px">Where to find these values</h2>
-  <ol>{{range .Help}}<li style="margin-bottom:6px">{{.}}</li>{{end}}</ol>
-  {{end}}
-  <p class="muted">Credentials are checked against {{.Title}} before they are saved, then stored encrypted. Only your own tool calls use them.</p>
 </div>
+{{if .Help}}
+<section class="card" aria-labelledby="help-h">
+  <h2 id="help-h">Where to find these values</h2>
+  <ol>{{range .Help}}<li>{{.}}</li>{{end}}</ol>
+</section>
+{{end}}
 {{template "bottom"}}{{end}}
 
-{{define "tokens"}}{{template "top"}}
-<header><h1>Personal access tokens</h1><a href="/">← Back</a></header>
-<div class="card">
-  <h2>Your tokens</h2>
+{{define "tokens"}}{{template "top" (page "Tokens" .Email "tokens")}}
+<h1>Personal access tokens</h1>
+<p class="lead">For bots and scripts that cannot sign in through a browser. A token acts as you, with your connections, but only within the tools and scope you give it.</p>
+<section class="card" aria-labelledby="list-h">
+  <h2 id="list-h">Your tokens</h2>
+  <ul class="rows">
   {{range .Tokens}}
-  <div class="row">
-    <span><strong>{{.Name}}</strong> <span class="muted">· {{len .Tools}} tools · created {{.CreatedAt.Format "2006-01-02"}}
+    <li>
+      <span class="what"><strong>{{.Name}}</strong><br><span class="meta">{{len .Tools}} tool{{if ne (len .Tools) 1}}s{{end}} · created {{.CreatedAt.Format "2006-01-02"}}
       · {{if .LastUsedAt}}last used {{.LastUsedAt.Format "2006-01-02 15:04"}}{{else}}never used{{end}}
       · {{if .ExpiresAt}}expires {{.ExpiresAt.Format "2006-01-02"}}{{else}}no expiry{{end}}
       · {{if .DryRun}}dry run · {{end}}{{if .MaxWritesPerHour}}{{.MaxWritesPerHour}} writes/hour{{else}}no write limit{{end}}</span></span>
-    <form method="post" action="/tokens/{{.ID}}/revoke"><button class="btn ghost" type="submit">Revoke</button></form>
-  </div>
-  {{else}}<p class="muted">No tokens yet.</p>{{end}}
-</div>
-<div class="card">
-  <h2>Create a token</h2>
-  {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+      <form method="post" action="/tokens/{{.ID}}/revoke"><button class="btn small danger" type="submit" data-confirm="Revoke {{.Name}}? Anything using it stops working right away.">Revoke {{.Name}}</button></form>
+    </li>
+  {{else}}
+    <li class="muted">No tokens yet. Create one below when a bot needs to reach valetkey.</li>
+  {{end}}
+  </ul>
+</section>
+<section class="card" aria-labelledby="new-h">
+  <h2 id="new-h">Create a token</h2>
+  {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
   <form method="post" action="/tokens">
     <label for="name">Name</label>
-    <input id="name" name="name" value="{{.Name}}" placeholder="atlas" autocomplete="off">
-    <label>Tools</label>
-    {{range .ToolRows}}
-    <div><label style="font-weight:400;margin:4px 0"><input type="checkbox" name="tools" value="{{.Name}}" style="width:auto" {{if .Checked}}checked{{end}}>
-      <code>{{.Name}}</code>{{if .Destructive}} <span class="error" style="padding:1px 6px">changes things</span>{{end}}</label></div>
-    {{end}}
-    <label for="max_writes">Write limit per hour <span class="muted">(0 = unlimited)</span></label>
-    <input id="max_writes" name="max_writes" type="number" min="0" max="1000" value="{{if .MaxWrites}}{{.MaxWrites}}{{else}}20{{end}}">
-    <label for="dry_run" style="font-weight:400"><input id="dry_run" type="checkbox" name="dry_run" style="width:auto" {{if .DryRun}}checked{{end}}>
-      Dry run: tools that change things only report what they would do</label>
-    <label for="scope">Scope <span class="muted">(JSON; a tool family without a key reaches nothing)</span></label>
-    <textarea id="scope" name="scope" rows="4" style="width:100%;font:13px ui-monospace,monospace;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text)"
+    <p class="hint" id="name-hint">So you can tell your tokens apart, for example the bot's name.</p>
+    <input id="name" name="name" value="{{.Name}}" placeholder="atlas" autocomplete="off" aria-describedby="name-hint">
+    <fieldset>
+      <legend>Tools it may use</legend>
+      {{range .ToolRows}}
+      <label class="check"><input type="checkbox" name="tools" value="{{.Name}}" {{if .Checked}}checked{{end}}>
+        <span><code>{{.Name}}</code>{{if .Destructive}} <span class="writes">changes things</span>{{end}}</span></label>
+      {{end}}
+    </fieldset>
+    <label for="max_writes">Write limit per hour</label>
+    <p class="hint" id="max-hint">How many calls that change things it may make in an hour. 0 means no limit.</p>
+    <input id="max_writes" name="max_writes" type="number" min="0" max="1000" value="{{if .MaxWrites}}{{.MaxWrites}}{{else}}20{{end}}" aria-describedby="max-hint">
+    <label class="check spaced" for="dry_run"><input id="dry_run" type="checkbox" name="dry_run" {{if .DryRun}}checked{{end}}>
+      <span>Dry run: tools that change things only say what they would do</span></label>
+    <label for="scope">Scope</label>
+    <p class="hint" id="scope-hint">JSON that names what each tool family may reach. A family left out reaches nothing.</p>
+    <textarea id="scope" name="scope" rows="4" class="mono" aria-describedby="scope-hint"
       placeholder='{"bitbucket":"acme/web","jenkins":["deploy-web"],"loki":"{app=\"web\"}"}'>{{.Scope}}</textarea>
     <label for="expiry">Expires</label>
-    <select id="expiry" name="expiry" style="padding:9px 11px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit">
+    <select id="expiry" name="expiry">
       <option value="7" {{if eq .Expiry "7"}}selected{{end}}>in 7 days</option>
       <option value="30" {{if eq .Expiry "30"}}selected{{end}}>in 30 days</option>
       <option value="90" {{if eq .Expiry "90"}}selected{{end}}>in 90 days</option>
       <option value="0" {{if eq .Expiry "0"}}selected{{end}}>never</option>
     </select>
-    <p><button class="btn" type="submit">Create token</button></p>
+    <div class="actions"><button class="btn primary" type="submit" data-busy="Creating…">Create token</button></div>
   </form>
-  <p class="muted">A token acts as you, with your connected credentials, but only within its tools and scope. Revoking it does not affect your other clients.</p>
-</div>
+  <p class="muted">Revoking a token does not affect your other clients.</p>
+</section>
 {{template "bottom"}}{{end}}
 
-{{define "token_created"}}{{template "top"}}
-<header><h1>Token created</h1><a href="/tokens">← Tokens</a></header>
+{{define "token_created"}}{{template "top" (page "Token created" .Email "tokens")}}
+<h1>Your new token</h1>
+<p class="lead"><strong>{{.Name}}</strong> is ready. Copy it now: valetkey shows it only this once.</p>
 <div class="card">
-  <p><strong>{{.Name}}</strong>: copy it now. It is shown only once.</p>
-  <pre>{{.Token}}</pre>
-  <p>Send it as a bearer token to</p>
+  <pre class="key">{{.Token}}</pre>
+  <p>Your bot sends it as a bearer token to</p>
   <pre>{{.MCPURL}}</pre>
+  <p>with this header:</p>
   <pre>Authorization: Bearer {{.Token}}</pre>
+  <p><a href="/tokens">Back to your tokens</a></p>
 </div>
 {{template "bottom"}}{{end}}
 
-{{define "activity"}}{{template "top"}}
-<header><h1>Activity</h1><a href="/">← Back</a></header>
+{{define "activity"}}{{template "top" (page "Activity" .Email "activity")}}
+<h1>Activity</h1>
+<p class="lead">Each call an agent made through valetkey, what it asked for, and what happened.</p>
 <section class="card" aria-labelledby="calls-h">
   <h2 id="calls-h">{{if .Admin}}Everyone's tool calls{{else}}Your tool calls{{end}}</h2>
   <form method="get" action="/activity" class="filters">
-    <div><label for="f-token">Token</label><input id="f-token" name="token" value="{{.Filter.TokenName}}" autocomplete="off"></div>
-    <div><label for="f-tool">Tool</label><input id="f-tool" name="tool" value="{{.Filter.Tool}}" autocomplete="off"></div>
+    <div><label for="f-token">Token name</label><input id="f-token" name="token" value="{{.Filter.TokenName}}" autocomplete="off"></div>
+    <div><label for="f-tool">Tool</label><input id="f-tool" name="tool" value="{{.Filter.Tool}}" autocomplete="off" class="mono"></div>
     <div><label for="f-outcome">Outcome</label><select id="f-outcome" name="outcome">
       <option value="">Any</option>
       {{range $o := (list "ok" "error" "refused" "dry_run")}}<option value="{{$o}}" {{if eq $o $.Filter.Outcome}}selected{{end}}>{{$o}}</option>{{end}}
     </select></div>
-    {{if .Admin}}<div><label for="f-user">User id</label><input id="f-user" name="user" value="{{.Filter.UserID}}" autocomplete="off"></div>{{end}}
+    {{if .Admin}}<div><label for="f-user">User id</label><input id="f-user" name="user" value="{{.Filter.UserID}}" autocomplete="off" class="mono"></div>{{end}}
     <button class="btn" type="submit">Filter</button>
   </form>
-  <p class="muted">Showing the latest {{len .Calls}}, newest first.</p>
+  {{if .Calls}}<p class="meta">Showing the latest {{len .Calls}}, newest first.</p>{{end}}
+  <ul class="rows">
   {{range .Calls}}
-  <div class="row call">
-    <div><code>{{.Tool}}</code> <span class="outcome {{.Outcome}}">{{.Outcome}}</span></div>
-    <div class="muted">{{.At.Format "2006-01-02 15:04:05"}} · {{if .TokenName}}token {{.TokenName}}{{else}}session{{end}}{{if $.Admin}} · {{.Email}}{{end}} · {{.MS}} ms</div>
-    {{if .Message}}<p class="{{if eq .Outcome "ok"}}muted{{else}}error{{end}}">{{.Message}}</p>{{end}}
-    <details><summary>Arguments</summary><pre>{{.Args}}</pre></details>
-  </div>
+    <li class="call">
+      <div><code>{{.Tool}}</code> <span class="outcome {{.Outcome}}">{{.Outcome}}</span></div>
+      <div class="meta">{{.At.Format "2006-01-02 15:04:05"}} · {{if .TokenName}}token {{.TokenName}}{{else}}signed-in client{{end}}{{if $.Admin}} · {{.Email}}{{end}} · {{.MS}} ms</div>
+      {{if .Message}}<p class="msg{{if or (eq .Outcome "refused") (eq .Outcome "error")}} error{{end}}">{{.Message}}</p>{{end}}
+      <details><summary>Arguments</summary><pre>{{.Args}}</pre></details>
+    </li>
   {{else}}
-    {{if .Filtered}}<p class="muted">No calls match these filters. <a href="/activity">Clear filters</a></p>
-    {{else}}<p class="muted">No calls yet. When an agent uses one of your tools, it shows up here.</p>{{end}}
+    {{if .Filtered}}<li class="muted">No calls match these filters. <a href="/activity">Clear the filters</a></li>
+    {{else}}<li class="muted">No tool calls yet. When an agent uses one of your connections, the call shows up here.</li>{{end}}
   {{end}}
+  </ul>
 </section>
 {{template "bottom"}}{{end}}
