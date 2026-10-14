@@ -54,7 +54,7 @@ func Load(getenv func(string) string) (Config, error) {
 	c := Config{
 		Addr:           or("ADDR", ":8080"),
 		PublicURL:      strings.TrimRight(need("PUBLIC_URL"), "/"),
-		DatabaseURL:    need("DATABASE_URL"),
+		DatabaseURL:    or("DATABASE_URL", "sqlite://./valetkey.db"),
 		GoogleClientID: need("GOOGLE_CLIENT_ID"),
 		GoogleSecret:   need("GOOGLE_CLIENT_SECRET"),
 		CatalogFile:    or("CATALOG_FILE", "catalog.json"),

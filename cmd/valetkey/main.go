@@ -4,6 +4,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -31,6 +32,19 @@ import (
 
 func main() {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	if len(os.Args) == 3 && os.Args[1] == "migrate" && os.Args[2] == "status" {
+		cfgURL := os.Getenv("DATABASE_URL")
+		if cfgURL == "" {
+			cfgURL = "sqlite://./valetkey.db"
+		}
+		out, err := store.MigrationStatus(context.Background(), cfgURL)
+		if err != nil {
+			log.Error("migrate status", "err", err)
+			os.Exit(1)
+		}
+		fmt.Print(out)
+		return
+	}
 	if err := run(log); err != nil {
 		log.Error("fatal", "err", err)
 		os.Exit(1)
@@ -78,7 +92,7 @@ func cleanup(ctx context.Context, st *store.Store, log *slog.Logger) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := st.DeleteExpired(ctx); err != nil {
+			if err := st.DeleteExpired(ctx, time.Time{}); err != nil {
 				log.Warn("cleanup failed", "err", err)
 			}
 		}

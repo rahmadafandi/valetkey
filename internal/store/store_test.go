@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"errors"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -90,7 +92,7 @@ func TestTokens(t *testing.T) {
 	if _, err := s.TakeToken(ctx, []byte("r1"), "refresh"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("refresh reuse: err = %v", err)
 	}
-	if err := s.DeleteExpired(ctx); err != nil {
+	if err := s.DeleteExpired(ctx, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.TakeToken(ctx, []byte("a2"), "access"); !errors.Is(err, ErrNotFound) {
@@ -166,10 +168,104 @@ func TestPersonalTokens(t *testing.T) {
 	if _, _, err := s.UsePersonalToken(ctx, []byte("h1")); !errors.Is(err, ErrNotFound) {
 		t.Errorf("revoked token still works: %v", err)
 	}
-	if err := s.DeleteExpired(ctx); err != nil {
+	if err := s.DeleteExpired(ctx, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
 	if list, _ := s.ListPersonalTokens(ctx, u.ID); len(list) != 0 {
 		t.Errorf("expired token not cleaned up: %d left", len(list))
+	}
+}
+
+func TestExpiredTokenNotFoundAcrossZones(t *testing.T) {
+	s := OpenTest(t)
+	u := seed(t, s)
+	// A non-UTC zone: SQLite compares timestamps as text, so the store must normalise.
+	zone := time.FixedZone("UTC+7", 7*3600)
+	if err := s.SaveToken(ctx, Token{Hash: []byte("h1"), Kind: "access", ClientID: "c1", UserID: u.ID,
+		ExpiresAt: time.Now().In(zone).Add(-time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.LookupToken(ctx, []byte("h1"), "access"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expired token found: %v", err)
+	}
+	if err := s.SaveToken(ctx, Token{Hash: []byte("h2"), Kind: "access", ClientID: "c1", UserID: u.ID, ExpiresAt: time.Now().In(zone).Add(time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, got, err := s.LookupToken(ctx, []byte("h2"), "access"); err != nil || got.Email != "rahmad@example.com" {
+		t.Fatalf("live token: %v %v", got, err)
+	}
+}
+
+func TestToolCalls(t *testing.T) {
+	s := OpenTest(t)
+	u, _ := s.UpsertUser(ctx, "a@example.com")
+	other, _ := s.UpsertUser(ctx, "b@example.com")
+	now := time.Now()
+	for _, c := range []ToolCall{
+		{UserID: u.ID, TokenID: "t1", TokenName: "atlas", Tool: "jenkins_deploy", IsWrite: true, Outcome: "ok", At: now.Add(-10 * time.Minute)},
+		{UserID: u.ID, TokenID: "t1", TokenName: "atlas", Tool: "jenkins_deploy", IsWrite: true, Outcome: "dry_run", At: now.Add(-5 * time.Minute)},
+		{UserID: u.ID, TokenID: "t1", TokenName: "atlas", Tool: "jenkins_deploy", IsWrite: true, Outcome: "refused", At: now.Add(-4 * time.Minute)},
+		{UserID: u.ID, TokenID: "t1", TokenName: "atlas", Tool: "jenkins_job", Outcome: "ok", At: now.Add(-3 * time.Minute)},
+		{UserID: u.ID, TokenID: "t1", TokenName: "atlas", Tool: "jenkins_deploy", IsWrite: true, Outcome: "ok", At: now.Add(-2 * time.Hour)},
+		{UserID: other.ID, Tool: "loki_query", Outcome: "error", Message: "boom", At: now},
+	} {
+		if err := s.RecordCall(ctx, c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n, err := s.CountWrites(ctx, "t1", now.Add(-time.Hour)); err != nil || n != 2 {
+		t.Errorf("CountWrites = %d, %v; want 2 (ok + dry_run within the hour)", n, err)
+	}
+	mine, err := s.ListCalls(ctx, CallFilter{UserID: u.ID, Limit: 200})
+	if err != nil || len(mine) != 5 || mine[0].Tool != "jenkins_job" || mine[0].Email != "a@example.com" {
+		t.Fatalf("ListCalls mine: %d %v %+v", len(mine), err, mine)
+	}
+	all, _ := s.ListCalls(ctx, CallFilter{Limit: 200})
+	if len(all) != 6 || all[0].Email != "b@example.com" {
+		t.Errorf("ListCalls all: %d", len(all))
+	}
+	refused, _ := s.ListCalls(ctx, CallFilter{UserID: u.ID, Outcome: "refused", Limit: 200})
+	if len(refused) != 1 {
+		t.Errorf("outcome filter: %d", len(refused))
+	}
+	if err := s.DeleteExpired(ctx, now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if all, _ := s.ListCalls(ctx, CallFilter{Limit: 200}); len(all) != 5 {
+		t.Errorf("retention kept %d calls, want 5", len(all))
+	}
+}
+
+func TestPersonalTokenFields(t *testing.T) {
+	s := OpenTest(t)
+	u, _ := s.UpsertUser(ctx, "a@example.com")
+	exp := time.Now().Add(time.Hour)
+	id, err := s.CreatePersonalToken(ctx, PersonalToken{UserID: u.ID, Name: "atlas", Tools: []string{"loki_query"},
+		Scope: []byte(`{"loki":"{app=\"web\"}"}`), ExpiresAt: &exp, MaxWritesPerHour: 5, DryRun: true}, []byte("hash"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, owner, err := s.UsePersonalToken(ctx, []byte("hash"))
+	if err != nil || p.ID != id || p.MaxWritesPerHour != 5 || !p.DryRun || p.Tools[0] != "loki_query" || owner.Email != "a@example.com" {
+		t.Fatalf("UsePersonalToken: %+v %v", p, err)
+	}
+	list, _ := s.ListPersonalTokens(ctx, u.ID)
+	if len(list) != 1 || list[0].LastUsedAt == nil {
+		t.Errorf("last used not recorded: %+v", list)
+	}
+}
+
+func TestMigrationsIdempotent(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "m.db")
+	for range 2 {
+		s, err := Open(context.Background(), "sqlite://"+path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s.Close()
+	}
+	out, err := MigrationStatus(context.Background(), "sqlite://"+path)
+	if err != nil || !strings.Contains(out, "20261014000001") || strings.Contains(out, "pending: 2026") {
+		t.Errorf("status: %q %v", out, err)
 	}
 }

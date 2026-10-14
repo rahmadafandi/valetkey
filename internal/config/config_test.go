@@ -61,14 +61,13 @@ func TestLoadValid(t *testing.T) {
 
 func TestLoadListsAllMissing(t *testing.T) {
 	m := valid()
-	delete(m, "DATABASE_URL")
 	delete(m, "GOOGLE_CLIENT_SECRET")
 	m["ALLOWED_DOMAINS"] = " , "
 	_, err := Load(env(m))
 	if err == nil {
 		t.Fatal("want error")
 	}
-	for _, k := range []string{"DATABASE_URL", "GOOGLE_CLIENT_SECRET", "ALLOWED_DOMAINS"} {
+	for _, k := range []string{"GOOGLE_CLIENT_SECRET", "ALLOWED_DOMAINS"} {
 		if !strings.Contains(err.Error(), k) {
 			t.Errorf("error %q does not name %s", err, k)
 		}

@@ -1,162 +1,281 @@
-// Package store is valetkey's Postgres access layer.
+// Package store is valetkey's database layer: SQLite or Postgres through bun.
 package store
 
 import (
 	"context"
-	_ "embed"
+	"crypto/rand"
+	"database/sql"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
-)
+	"github.com/uptrace/bun"
+	"github.com/uptrace/bun/dialect/pgdialect"
+	"github.com/uptrace/bun/dialect/sqlitedialect"
+	"github.com/uptrace/bun/driver/pgdriver"
+	"github.com/uptrace/bun/migrate"
+	_ "modernc.org/sqlite"
 
-//go:embed schema.sql
-var schema string
+	"github.com/rahmadafandi/valetkey/internal/store/migrations"
+)
 
 var ErrNotFound = errors.New("not found")
 
-type Store struct{ db *pgxpool.Pool }
+type Store struct{ db *bun.DB }
 
-type User struct{ ID, Email string }
+type User struct {
+	bun.BaseModel `bun:"table:users"`
+	ID            string    `bun:"id,pk"`
+	Email         string    `bun:"email"`
+	CreatedAt     time.Time `bun:"created_at"`
+}
 
 type Client struct {
-	ID, Name     string
-	RedirectURIs []string
+	bun.BaseModel `bun:"table:oauth_clients"`
+	ID            string    `bun:"id,pk"`
+	Name          string    `bun:"name"`
+	RedirectURIs  []string  `bun:"redirect_uris"`
+	CreatedAt     time.Time `bun:"created_at"`
 }
 
 type Code struct {
-	Hash                                     []byte
-	ClientID, UserID, RedirectURI, Challenge string
-	ExpiresAt                                time.Time
+	bun.BaseModel `bun:"table:oauth_codes"`
+	Hash          []byte    `bun:"code_hash,pk"`
+	ClientID      string    `bun:"client_id"`
+	UserID        string    `bun:"user_id"`
+	RedirectURI   string    `bun:"redirect_uri"`
+	Challenge     string    `bun:"code_challenge"`
+	ExpiresAt     time.Time `bun:"expires_at"`
 }
 
 type Token struct {
-	Hash                   []byte
-	Kind, ClientID, UserID string
-	ExpiresAt              time.Time
+	bun.BaseModel `bun:"table:oauth_tokens"`
+	Hash          []byte    `bun:"token_hash,pk"`
+	Kind          string    `bun:"kind"`
+	ClientID      string    `bun:"client_id"`
+	UserID        string    `bun:"user_id"`
+	ExpiresAt     time.Time `bun:"expires_at"`
+	CreatedAt     time.Time `bun:"created_at"`
 }
 
+type credential struct {
+	bun.BaseModel `bun:"table:credentials"`
+	UserID        string    `bun:"user_id,pk"`
+	System        string    `bun:"system,pk"`
+	Sealed        []byte    `bun:"sealed"`
+	UpdatedAt     time.Time `bun:"updated_at"`
+}
+
+// PersonalToken is a static bearer token that acts as its owner, limited to
+// Tools and Scope (raw JSON, interpreted by the tools package).
+type PersonalToken struct {
+	bun.BaseModel    `bun:"table:personal_tokens"`
+	ID               string     `bun:"id,pk"`
+	UserID           string     `bun:"user_id"`
+	Name             string     `bun:"name"`
+	Hash             []byte     `bun:"token_hash"`
+	Tools            []string   `bun:"tools"`
+	Scope            []byte     `bun:"scope"`
+	MaxWritesPerHour int        `bun:"max_writes_per_hour"` // 0 means unlimited
+	DryRun           bool       `bun:"dry_run"`
+	ExpiresAt        *time.Time `bun:"expires_at"` // nil means it never expires
+	CreatedAt        time.Time  `bun:"created_at"`
+	LastUsedAt       *time.Time `bun:"last_used_at"`
+}
+
+// ToolCall is one audited MCP tool call.
+type ToolCall struct {
+	bun.BaseModel `bun:"table:tool_calls,alias:tc"`
+	ID            string    `bun:"id,pk"`
+	UserID        string    `bun:"user_id"`
+	TokenID       string    `bun:"token_id,nullzero"` // empty for an OAuth session
+	TokenName     string    `bun:"token_name"`
+	Tool          string    `bun:"tool"`
+	IsWrite       bool      `bun:"is_write"`
+	Args          string    `bun:"args"`
+	Outcome       string    `bun:"outcome"` // ok, error, refused, dry_run
+	Message       string    `bun:"message"`
+	MS            int64     `bun:"ms"`
+	At            time.Time `bun:"at"`
+	Email         string    `bun:"email,scanonly"`
+}
+
+type CallFilter struct {
+	UserID, TokenName, Tool, Outcome string // empty means any
+	Limit                            int
+}
+
+// Open connects to url (sqlite://path or postgres://...) and applies pending migrations.
 func Open(ctx context.Context, url string) (*Store, error) {
-	cfg, err := pgxpool.ParseConfig(url)
+	db, err := connect(url)
 	if err != nil {
 		return nil, err
 	}
-	return open(ctx, cfg)
-}
-
-// ponytail: schema.sql is idempotent and runs on every start; adopt a migration tool when a column must change.
-func open(ctx context.Context, cfg *pgxpool.Config) (*Store, error) {
-	db, err := pgxpool.NewWithConfig(ctx, cfg)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := db.Exec(ctx, schema); err != nil {
+	if err := migrations.Up(ctx, db); err != nil {
 		db.Close()
-		return nil, err
+		return nil, fmt.Errorf("migrate: %w", err)
 	}
 	return &Store{db: db}, nil
 }
 
+func connect(url string) (*bun.DB, error) {
+	switch {
+	case strings.HasPrefix(url, "sqlite://"):
+		path := strings.TrimPrefix(url, "sqlite://")
+		if path == "" {
+			return nil, errors.New("DATABASE_URL: sqlite:// needs a file path, e.g. sqlite:///data/valetkey.db")
+		}
+		sqldb, err := sql.Open("sqlite", "file:"+path+"?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+		if err != nil {
+			return nil, err
+		}
+		// ponytail: one connection serialises writes and avoids SQLITE_BUSY; switch to Postgres when that limits throughput.
+		sqldb.SetMaxOpenConns(1)
+		return bun.NewDB(sqldb, sqlitedialect.New()), nil
+	case strings.HasPrefix(url, "postgres://"), strings.HasPrefix(url, "postgresql://"):
+		return bun.NewDB(sql.OpenDB(pgdriver.NewConnector(pgdriver.WithDSN(url))), pgdialect.New()), nil
+	}
+	return nil, errors.New("DATABASE_URL must start with sqlite:// or postgres://")
+}
+
+// MigrationStatus lists applied and pending migrations without applying any.
+func MigrationStatus(ctx context.Context, url string) (string, error) {
+	db, err := connect(url)
+	if err != nil {
+		return "", err
+	}
+	defer db.Close()
+	m := migrate.NewMigrator(db, migrations.Migrations)
+	if err := m.Init(ctx); err != nil {
+		return "", err
+	}
+	ms, err := m.MigrationsWithStatus(ctx)
+	if err != nil {
+		return "", err
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "applied: %s\n", ms.Applied())
+	fmt.Fprintf(&b, "pending: %s\n", ms.Unapplied())
+	return b.String(), nil
+}
+
 func (s *Store) Close() { s.db.Close() }
 
+func newID() string { return rand.Text() }
+
+// now is UTC so SQLite, which compares timestamps as text, orders them correctly.
+func now() time.Time { return time.Now().UTC() }
+
 func notFound(err error) error {
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNotFound
 	}
 	return err
 }
 
 func (s *Store) UpsertUser(ctx context.Context, email string) (User, error) {
-	var u User
-	err := s.db.QueryRow(ctx, `INSERT INTO users (email) VALUES ($1)
-		ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email
-		RETURNING id::text, email`, email).Scan(&u.ID, &u.Email)
+	u := User{ID: newID(), Email: email, CreatedAt: now()}
+	if _, err := s.db.NewInsert().Model(&u).On("CONFLICT (email) DO NOTHING").Exec(ctx); err != nil {
+		return User{}, err
+	}
+	err := s.db.NewSelect().Model(&u).Where("email = ?", email).Scan(ctx)
 	return u, err
 }
 
 func (s *Store) CreateClient(ctx context.Context, c Client) error {
-	_, err := s.db.Exec(ctx, `INSERT INTO oauth_clients (id, name, redirect_uris) VALUES ($1, $2, $3)`,
-		c.ID, c.Name, c.RedirectURIs)
+	c.CreatedAt = now()
+	_, err := s.db.NewInsert().Model(&c).Exec(ctx)
 	return err
 }
 
 func (s *Store) GetClient(ctx context.Context, id string) (Client, error) {
-	c := Client{ID: id}
-	err := s.db.QueryRow(ctx, `SELECT name, redirect_uris FROM oauth_clients WHERE id = $1`, id).
-		Scan(&c.Name, &c.RedirectURIs)
+	var c Client
+	err := s.db.NewSelect().Model(&c).Where("id = ?", id).Scan(ctx)
 	return c, notFound(err)
 }
 
 func (s *Store) SaveCode(ctx context.Context, c Code) error {
-	_, err := s.db.Exec(ctx, `INSERT INTO oauth_codes
-		(code_hash, client_id, user_id, redirect_uri, code_challenge, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6)`,
-		c.Hash, c.ClientID, c.UserID, c.RedirectURI, c.Challenge, c.ExpiresAt)
+	c.ExpiresAt = c.ExpiresAt.UTC()
+	_, err := s.db.NewInsert().Model(&c).Exec(ctx)
 	return err
 }
 
 // TakeCode deletes and returns a code, so each code is redeemed at most once.
 func (s *Store) TakeCode(ctx context.Context, hash []byte) (Code, error) {
-	c := Code{Hash: hash}
-	err := s.db.QueryRow(ctx, `DELETE FROM oauth_codes WHERE code_hash = $1
-		RETURNING client_id, user_id::text, redirect_uri, code_challenge, expires_at`, hash).
-		Scan(&c.ClientID, &c.UserID, &c.RedirectURI, &c.Challenge, &c.ExpiresAt)
+	var c Code
+	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if err := tx.NewSelect().Model(&c).Where("code_hash = ?", hash).Scan(ctx); err != nil {
+			return err
+		}
+		return deleteOne(tx.NewDelete().Model((*Code)(nil)).Where("code_hash = ?", hash).Exec(ctx))
+	})
 	return c, notFound(err)
 }
 
+// deleteOne turns a delete that lost a race (no row left) into sql.ErrNoRows.
+func deleteOne(res sql.Result, err error) error {
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return sql.ErrNoRows
+	}
+	return nil
+}
+
 func (s *Store) SaveToken(ctx context.Context, t Token) error {
-	_, err := s.db.Exec(ctx, `INSERT INTO oauth_tokens (token_hash, kind, client_id, user_id, expires_at)
-		VALUES ($1, $2, $3, $4, $5)`, t.Hash, t.Kind, t.ClientID, t.UserID, t.ExpiresAt)
+	t.ExpiresAt, t.CreatedAt = t.ExpiresAt.UTC(), now()
+	_, err := s.db.NewInsert().Model(&t).Exec(ctx)
 	return err
 }
 
 // TakeToken deletes and returns a token; used to rotate refresh tokens.
 func (s *Store) TakeToken(ctx context.Context, hash []byte, kind string) (Token, error) {
-	t := Token{Hash: hash, Kind: kind}
-	err := s.db.QueryRow(ctx, `DELETE FROM oauth_tokens WHERE token_hash = $1 AND kind = $2
-		RETURNING client_id, user_id::text, expires_at`, hash, kind).
-		Scan(&t.ClientID, &t.UserID, &t.ExpiresAt)
+	var t Token
+	err := s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		if err := tx.NewSelect().Model(&t).Where("token_hash = ? AND kind = ?", hash, kind).Scan(ctx); err != nil {
+			return err
+		}
+		return deleteOne(tx.NewDelete().Model((*Token)(nil)).Where("token_hash = ? AND kind = ?", hash, kind).Exec(ctx))
+	})
 	return t, notFound(err)
 }
 
 // LookupToken returns an unexpired token and its user.
 func (s *Store) LookupToken(ctx context.Context, hash []byte, kind string) (Token, User, error) {
-	t := Token{Hash: hash, Kind: kind}
+	var t Token
 	var u User
-	err := s.db.QueryRow(ctx, `SELECT t.client_id, t.expires_at, u.id::text, u.email
-		FROM oauth_tokens t JOIN users u ON u.id = t.user_id
-		WHERE t.token_hash = $1 AND t.kind = $2 AND t.expires_at > now()`, hash, kind).
-		Scan(&t.ClientID, &t.ExpiresAt, &u.ID, &u.Email)
-	t.UserID = u.ID
+	err := s.db.NewSelect().Model(&t).Where("token_hash = ? AND kind = ? AND expires_at > ?", hash, kind, now()).Scan(ctx)
+	if err == nil {
+		err = s.db.NewSelect().Model(&u).Where("id = ?", t.UserID).Scan(ctx)
+	}
 	return t, u, notFound(err)
 }
 
 func (s *Store) PutCredential(ctx context.Context, userID, system string, sealed []byte) error {
-	_, err := s.db.Exec(ctx, `INSERT INTO credentials (user_id, system, sealed) VALUES ($1, $2, $3)
-		ON CONFLICT (user_id, system) DO UPDATE SET sealed = EXCLUDED.sealed, updated_at = now()`,
-		userID, system, sealed)
+	c := credential{UserID: userID, System: system, Sealed: sealed, UpdatedAt: now()}
+	_, err := s.db.NewInsert().Model(&c).
+		On("CONFLICT (user_id, system) DO UPDATE").
+		Set("sealed = EXCLUDED.sealed").Set("updated_at = EXCLUDED.updated_at").
+		Exec(ctx)
 	return err
 }
 
 func (s *Store) GetCredential(ctx context.Context, userID, system string) ([]byte, error) {
-	var b []byte
-	err := s.db.QueryRow(ctx, `SELECT sealed FROM credentials WHERE user_id = $1 AND system = $2`,
-		userID, system).Scan(&b)
-	return b, notFound(err)
+	var c credential
+	err := s.db.NewSelect().Model(&c).Where("user_id = ? AND system = ?", userID, system).Scan(ctx)
+	return c.Sealed, notFound(err)
 }
 
 func (s *Store) DeleteCredential(ctx context.Context, userID, system string) error {
-	_, err := s.db.Exec(ctx, `DELETE FROM credentials WHERE user_id = $1 AND system = $2`, userID, system)
+	_, err := s.db.NewDelete().Model((*credential)(nil)).Where("user_id = ? AND system = ?", userID, system).Exec(ctx)
 	return err
 }
 
 func (s *Store) ConnectedSystems(ctx context.Context, userID string) (map[string]bool, error) {
-	rows, err := s.db.Query(ctx, `SELECT system FROM credentials WHERE user_id = $1`, userID)
-	if err != nil {
-		return nil, err
-	}
-	systems, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	var systems []string
+	err := s.db.NewSelect().Model((*credential)(nil)).Column("system").Where("user_id = ?", userID).Scan(ctx, &systems)
 	m := make(map[string]bool, len(systems))
 	for _, sys := range systems {
 		m[sys] = true
@@ -164,63 +283,95 @@ func (s *Store) ConnectedSystems(ctx context.Context, userID string) (map[string
 	return m, err
 }
 
-func (s *Store) DeleteExpired(ctx context.Context) error {
-	_, err := s.db.Exec(ctx, `DELETE FROM oauth_codes WHERE expires_at < now();
-		DELETE FROM oauth_tokens WHERE expires_at < now();
-		DELETE FROM personal_tokens WHERE expires_at < now()`)
+// DeleteExpired removes expired codes and tokens, and tool calls older than
+// auditBefore unless it is zero.
+func (s *Store) DeleteExpired(ctx context.Context, auditBefore time.Time) error {
+	t := now()
+	for _, q := range []*bun.DeleteQuery{
+		s.db.NewDelete().Model((*Code)(nil)).Where("expires_at < ?", t),
+		s.db.NewDelete().Model((*Token)(nil)).Where("expires_at < ?", t),
+		s.db.NewDelete().Model((*PersonalToken)(nil)).Where("expires_at < ?", t),
+	} {
+		if _, err := q.Exec(ctx); err != nil {
+			return err
+		}
+	}
+	if auditBefore.IsZero() {
+		return nil
+	}
+	_, err := s.db.NewDelete().Model((*ToolCall)(nil)).Where("at < ?", auditBefore.UTC()).Exec(ctx)
 	return err
 }
 
-// PersonalToken is a static bearer token that acts as its owner, limited to
-// Tools and Scope (raw JSON, interpreted by the tools package).
-type PersonalToken struct {
-	ID, UserID, Name string
-	Tools            []string
-	Scope            []byte
-	ExpiresAt        *time.Time // nil means it never expires
-	CreatedAt        time.Time
-	LastUsedAt       *time.Time
-}
-
 func (s *Store) CreatePersonalToken(ctx context.Context, t PersonalToken, hash []byte) (string, error) {
-	var id string
-	err := s.db.QueryRow(ctx, `INSERT INTO personal_tokens (user_id, name, token_hash, tools, scope, expires_at)
-		VALUES ($1, $2, $3, $4, $5, $6) RETURNING id::text`,
-		t.UserID, t.Name, hash, t.Tools, t.Scope, t.ExpiresAt).Scan(&id)
-	return id, err
+	t.ID, t.Hash, t.CreatedAt = newID(), hash, now()
+	if t.ExpiresAt != nil {
+		exp := t.ExpiresAt.UTC()
+		t.ExpiresAt = &exp
+	}
+	_, err := s.db.NewInsert().Model(&t).Exec(ctx)
+	return t.ID, err
 }
 
 // UsePersonalToken returns an unexpired token and its owner, and records the use.
 func (s *Store) UsePersonalToken(ctx context.Context, hash []byte) (PersonalToken, User, error) {
 	var t PersonalToken
 	var u User
-	err := s.db.QueryRow(ctx, `UPDATE personal_tokens p SET last_used_at = now()
-		FROM users u WHERE u.id = p.user_id AND p.token_hash = $1
-		  AND (p.expires_at IS NULL OR p.expires_at > now())
-		RETURNING p.id::text, p.name, p.tools, p.scope, p.expires_at, p.created_at, u.id::text, u.email`, hash).
-		Scan(&t.ID, &t.Name, &t.Tools, &t.Scope, &t.ExpiresAt, &t.CreatedAt, &u.ID, &u.Email)
-	t.UserID = u.ID
+	at := now()
+	err := s.db.NewSelect().Model(&t).
+		Where("token_hash = ? AND (expires_at IS NULL OR expires_at > ?)", hash, at).Scan(ctx)
+	if err == nil {
+		_, err = s.db.NewUpdate().Model((*PersonalToken)(nil)).Set("last_used_at = ?", at).Where("id = ?", t.ID).Exec(ctx)
+		t.LastUsedAt = &at
+	}
+	if err == nil {
+		err = s.db.NewSelect().Model(&u).Where("id = ?", t.UserID).Scan(ctx)
+	}
 	return t, u, notFound(err)
 }
 
 func (s *Store) ListPersonalTokens(ctx context.Context, userID string) ([]PersonalToken, error) {
-	rows, err := s.db.Query(ctx, `SELECT id::text, user_id::text, name, tools, scope, expires_at, created_at, last_used_at
-		FROM personal_tokens WHERE user_id = $1 ORDER BY created_at DESC`, userID)
-	if err != nil {
-		return nil, err
-	}
-	return pgx.CollectRows(rows, func(r pgx.CollectableRow) (PersonalToken, error) {
-		var t PersonalToken
-		err := r.Scan(&t.ID, &t.UserID, &t.Name, &t.Tools, &t.Scope, &t.ExpiresAt, &t.CreatedAt, &t.LastUsedAt)
-		return t, err
-	})
+	var list []PersonalToken
+	err := s.db.NewSelect().Model(&list).Where("user_id = ?", userID).Order("created_at DESC").Scan(ctx)
+	return list, err
 }
 
 // DeletePersonalToken revokes one of the user's tokens; other users' tokens are untouched.
 func (s *Store) DeletePersonalToken(ctx context.Context, userID, id string) error {
-	tag, err := s.db.Exec(ctx, `DELETE FROM personal_tokens WHERE user_id = $1 AND id::text = $2`, userID, id)
-	if err == nil && tag.RowsAffected() == 0 {
-		return ErrNotFound
+	err := deleteOne(s.db.NewDelete().Model((*PersonalToken)(nil)).Where("user_id = ? AND id = ?", userID, id).Exec(ctx))
+	return notFound(err)
+}
+
+func (s *Store) RecordCall(ctx context.Context, c ToolCall) error {
+	c.ID = newID()
+	if c.At.IsZero() {
+		c.At = now()
 	}
+	c.At = c.At.UTC()
+	_, err := s.db.NewInsert().Model(&c).Exec(ctx)
 	return err
+}
+
+// CountWrites counts a token's write calls since a time that used the
+// upstream or would have (ok, error, dry_run); refusals do not count.
+func (s *Store) CountWrites(ctx context.Context, tokenID string, since time.Time) (int, error) {
+	n, err := s.db.NewSelect().Model((*ToolCall)(nil)).
+		Where("token_id = ? AND is_write = ? AND at >= ?", tokenID, true, since.UTC()).
+		Where("outcome IN (?)", bun.In([]string{"ok", "error", "dry_run"})).
+		Count(ctx)
+	return int(n), err
+}
+
+// ListCalls returns the newest calls first, with each caller's email.
+func (s *Store) ListCalls(ctx context.Context, f CallFilter) ([]ToolCall, error) {
+	var calls []ToolCall
+	q := s.db.NewSelect().Model(&calls).ColumnExpr("tc.*").ColumnExpr("u.email").
+		Join("JOIN users AS u ON u.id = tc.user_id").OrderExpr("tc.at DESC").Limit(int64(f.Limit))
+	for col, v := range map[string]string{"tc.user_id": f.UserID, "tc.token_name": f.TokenName, "tc.tool": f.Tool, "tc.outcome": f.Outcome} {
+		if v != "" {
+			q = q.Where("? = ?", bun.Ident(col), v)
+		}
+	}
+	err := q.Scan(ctx)
+	return calls, err
 }
