@@ -1,0 +1,157 @@
+{{define "top"}}<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>valetkey</title>
+<style>
+:root{--bg:#f6f8f9;--card:#fff;--text:#16202a;--muted:#5b6874;--line:#e2e7eb;--accent:#12a89d;--danger:#c0392b}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1417;--card:#172026;--text:#e6edf1;--muted:#93a1ad;--line:#26323a}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,sans-serif}
+main{max-width:860px;margin:0 auto;padding:32px 16px}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:24px}
+h1{font-size:22px;margin:0}h2{font-size:17px;margin:0 0 12px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:20px;margin-bottom:16px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
+.muted{color:var(--muted)}a{color:var(--accent)}
+pre{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;overflow-x:auto;white-space:pre-wrap;word-break:break-all}
+.row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-top:1px solid var(--line)}
+.row:first-of-type{border-top:0}
+.ok{color:var(--accent);font-weight:600}.no{color:var(--muted)}
+.btn{display:inline-block;background:var(--accent);color:#fff;border:0;border-radius:10px;padding:9px 16px;font:inherit;cursor:pointer;text-decoration:none}
+.btn.ghost{background:transparent;color:var(--danger);border:1px solid var(--line)}
+label{display:block;margin:12px 0 4px;font-weight:600}
+input{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:inherit}
+.error{background:rgba(192,57,43,.1);color:var(--danger);border-radius:10px;padding:10px 12px}
+</style>
+</head>
+<body><main>{{end}}
+
+{{define "bottom"}}</main></body></html>{{end}}
+
+{{define "signin"}}{{template "top"}}
+<div class="card" style="text-align:center;padding:48px 20px">
+  <h1>valetkey</h1>
+  <p class="muted">A fence for AI agents doing ops work. Sign in to connect your tools and issue scoped tokens.</p>
+  <a class="btn" href="/login">Sign in with Google</a>
+</div>
+{{template "bottom"}}{{end}}
+
+{{define "home"}}{{template "top"}}
+<header><h1>valetkey</h1><span class="muted">{{.Email}} · <a href="/logout">Sign out</a></span></header>
+
+<div class="card">
+  <h2>Connect your client</h2>
+  <p class="muted">Add this URL as a remote MCP server (Streamable HTTP). Your client opens a Google sign-in the first time.</p>
+  <pre>{{.MCPURL}}</pre>
+  <p><strong>Claude Code</strong></p>
+  <pre>claude mcp add --transport http valetkey {{.MCPURL}}</pre>
+  <p><strong>Claude Desktop / claude.ai</strong>: Settings → Connectors → Add custom connector → paste the URL.</p>
+  <p><strong>Cursor</strong> (<code>~/.cursor/mcp.json</code>)</p>
+  <pre>{"mcpServers": {"valetkey": {"url": "{{.MCPURL}}"}}}</pre>
+  <p class="muted">Other clients (ChatGPT, internal agents): add the URL as a remote MCP server with OAuth.</p>
+</div>
+
+<div class="card">
+  <h2>Your connections</h2>
+  {{range .Systems}}
+  <div class="row">
+    <span>{{.Title}} · {{if .Connected}}<span class="ok">Connected</span>{{else}}<span class="no">Not connected</span>{{end}}</span>
+    <a href="/connect/{{.System}}">{{if .Connected}}Manage{{else}}Connect{{end}}</a>
+  </div>
+  {{else}}<p class="muted">No systems are enabled on this server.</p>{{end}}
+</div>
+
+<div class="card">
+  <h2>Personal access tokens</h2>
+  <p class="muted">Static bearer tokens for headless bots that cannot do OAuth. Each one is limited to the tools and the jobs, repositories and logs you pick.</p>
+  <a href="/tokens">Manage tokens</a>
+</div>
+
+{{if .Catalog}}
+<div class="card">
+  <h2>Catalog</h2>
+  {{range .Catalog}}
+  <div class="row" style="display:block">
+    <strong>{{.Name}}</strong> <span class="muted">{{.Description}}</span>
+    {{if .Setup}}<pre>{{.Setup}}</pre>{{end}}
+  </div>
+  {{end}}
+</div>
+{{end}}
+{{template "bottom"}}{{end}}
+
+{{define "connect"}}{{template "top"}}
+<header><h1>Connect {{.Title}}</h1><a href="/">← Back</a></header>
+<div class="card">
+  {{if .Connected}}<p class="ok">Connected. Submit again to replace your credentials.</p>{{end}}
+  {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+  <form method="post" action="/connect/{{.System}}">
+    {{range .Fields}}
+    <label for="{{.Name}}">{{.Label}}{{if .Optional}} <span class="muted">(optional)</span>{{end}}</label>
+    <input id="{{.Name}}" type="{{if .Secret}}password{{else}}text{{end}}" name="{{.Name}}" autocomplete="off">
+    {{end}}
+    <p><button class="btn" type="submit" name="action" value="save">Verify and save</button></p>
+  </form>
+  {{if .Connected}}
+  <form method="post" action="/connect/{{.System}}">
+    <button class="btn ghost" type="submit" name="action" value="disconnect">Disconnect</button>
+  </form>
+  {{end}}
+  {{if .Help}}
+  <h2 style="margin-top:20px">Where to find these values</h2>
+  <ol>{{range .Help}}<li style="margin-bottom:6px">{{.}}</li>{{end}}</ol>
+  {{end}}
+  <p class="muted">Credentials are checked against {{.Title}} before they are saved, then stored encrypted. Only your own tool calls use them.</p>
+</div>
+{{template "bottom"}}{{end}}
+
+{{define "tokens"}}{{template "top"}}
+<header><h1>Personal access tokens</h1><a href="/">← Back</a></header>
+<div class="card">
+  <h2>Your tokens</h2>
+  {{range .Tokens}}
+  <div class="row">
+    <span><strong>{{.Name}}</strong> <span class="muted">· {{len .Tools}} tools · created {{.CreatedAt.Format "2006-01-02"}}
+      · {{if .LastUsedAt}}last used {{.LastUsedAt.Format "2006-01-02 15:04"}}{{else}}never used{{end}}
+      · {{if .ExpiresAt}}expires {{.ExpiresAt.Format "2006-01-02"}}{{else}}no expiry{{end}}</span></span>
+    <form method="post" action="/tokens/{{.ID}}/revoke"><button class="btn ghost" type="submit">Revoke</button></form>
+  </div>
+  {{else}}<p class="muted">No tokens yet.</p>{{end}}
+</div>
+<div class="card">
+  <h2>Create a token</h2>
+  {{if .Error}}<p class="error">{{.Error}}</p>{{end}}
+  <form method="post" action="/tokens">
+    <label for="name">Name</label>
+    <input id="name" name="name" value="{{.Name}}" placeholder="atlas" autocomplete="off">
+    <label>Tools</label>
+    {{range .ToolRows}}
+    <div><label style="font-weight:400;margin:4px 0"><input type="checkbox" name="tools" value="{{.Name}}" style="width:auto" {{if .Checked}}checked{{end}}>
+      <code>{{.Name}}</code>{{if .Destructive}} <span class="error" style="padding:1px 6px">changes things</span>{{end}}</label></div>
+    {{end}}
+    <label for="scope">Scope <span class="muted">(JSON; a tool family without a key reaches nothing)</span></label>
+    <textarea id="scope" name="scope" rows="4" style="width:100%;font:13px ui-monospace,monospace;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text)"
+      placeholder='{"bitbucket":"acme/web","jenkins":["deploy-web"],"loki":"{app=\"web\"}"}'>{{.Scope}}</textarea>
+    <label for="expiry">Expires</label>
+    <select id="expiry" name="expiry" style="padding:9px 11px;border-radius:10px;border:1px solid var(--line);background:var(--bg);color:var(--text);font:inherit">
+      <option value="7" {{if eq .Expiry "7"}}selected{{end}}>in 7 days</option>
+      <option value="30" {{if eq .Expiry "30"}}selected{{end}}>in 30 days</option>
+      <option value="90" {{if eq .Expiry "90"}}selected{{end}}>in 90 days</option>
+      <option value="0" {{if eq .Expiry "0"}}selected{{end}}>never</option>
+    </select>
+    <p><button class="btn" type="submit">Create token</button></p>
+  </form>
+  <p class="muted">A token acts as you, with your connected credentials, but only within its tools and scope. Revoking it does not affect your other clients.</p>
+</div>
+{{template "bottom"}}{{end}}
+
+{{define "token_created"}}{{template "top"}}
+<header><h1>Token created</h1><a href="/tokens">← Tokens</a></header>
+<div class="card">
+  <p><strong>{{.Name}}</strong>: copy it now. It is shown only once.</p>
+  <pre>{{.Token}}</pre>
+  <p>Send it as a bearer token to</p>
+  <pre>{{.MCPURL}}</pre>
+  <pre>Authorization: Bearer {{.Token}}</pre>
+</div>
+{{template "bottom"}}{{end}}
