@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/rahmadafandi/valetkey/internal/auth"
 	"github.com/rahmadafandi/valetkey/internal/creds"
@@ -357,5 +358,21 @@ func TestRevokeLabelStaysShort(t *testing.T) {
 	}
 	if _, body := e.get(t, "/tokens", true); !strings.Contains(body, `aria-label="Revoke `+long+`">Revoke</button>`) {
 		t.Error("revoke button should show a short label and name the token in aria-label")
+	}
+}
+
+func TestTimesAreLabelledUTC(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.FixedZone("WIB", 7*3600))
+	e.as.Store.RecordCall(ctx, store.ToolCall{UserID: e.user.ID, Tool: "loki_query", Outcome: "ok", Args: `{}`, At: at})
+	if _, body := e.get(t, "/activity", true); !strings.Contains(body, "2026-01-01 20:04:05 UTC") {
+		t.Error("activity time is not shown as UTC")
+	}
+	if _, err := e.as.Store.CreatePersonalToken(ctx, store.PersonalToken{UserID: e.user.ID, Name: "used", Tools: []string{"loki_query"}, Scope: []byte(`{}`), LastUsedAt: &at}, []byte("hu")); err != nil {
+		t.Fatal(err)
+	}
+	if _, body := e.get(t, "/tokens", true); !strings.Contains(body, "last used 2026-01-01 20:04 UTC") || !strings.Contains(body, `title="Dates and times are UTC"`) {
+		t.Error("token times are not labelled UTC")
 	}
 }

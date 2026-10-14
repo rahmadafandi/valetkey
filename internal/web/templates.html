@@ -128,9 +128,9 @@
   <ul class="rows">
   {{range .Tokens}}
     <li>
-      <span class="what"><strong>{{.Name}}</strong><br><span class="meta">{{len .Tools}} tool{{if ne (len .Tools) 1}}s{{end}} · created {{.CreatedAt.Format "2006-01-02"}}
-      · {{if .LastUsedAt}}last used {{.LastUsedAt.Format "2006-01-02 15:04"}}{{else}}never used{{end}}
-      · {{if .ExpiresAt}}expires {{.ExpiresAt.Format "2006-01-02"}}{{else}}no expiry{{end}}
+      <span class="what"><strong>{{.Name}}</strong><br><span class="meta" title="Dates and times are UTC">{{len .Tools}} tool{{if ne (len .Tools) 1}}s{{end}} · created {{.CreatedAt.UTC.Format "2006-01-02"}}
+      · {{if .LastUsedAt}}last used {{.LastUsedAt.UTC.Format "2006-01-02 15:04"}} UTC{{else}}never used{{end}}
+      · {{if .ExpiresAt}}expires {{.ExpiresAt.UTC.Format "2006-01-02"}}{{else}}no expiry{{end}}
       · {{if .DryRun}}dry run · {{end}}{{if .MaxWritesPerHour}}{{.MaxWritesPerHour}} writes/hour{{else}}no write limit{{end}}</span></span>
       <form method="post" action="/tokens/{{.ID}}/revoke"><button class="btn small danger" type="submit" data-confirm="Revoke {{.Name}}? Anything using it stops working right away." aria-label="Revoke {{.Name}}">Revoke</button></form>
     </li>
@@ -208,7 +208,7 @@
   {{range .Calls}}
     <li class="call">
       <div><code>{{.Tool}}</code> <span class="outcome {{.Outcome}}">{{.Outcome}}</span></div>
-      <div class="meta">{{.At.Format "2006-01-02 15:04:05"}} · {{if .TokenName}}token {{.TokenName}}{{else}}signed-in client{{end}}{{if $.Admin}} · {{.Email}}{{end}} · {{.MS}} ms</div>
+      <div class="meta">{{.At.UTC.Format "2006-01-02 15:04:05"}} UTC · {{if .TokenName}}token {{.TokenName}}{{else}}signed-in client{{end}}{{if $.Admin}} · {{.Email}}{{end}} · {{.MS}} ms</div>
       {{if .Message}}<p class="msg{{if or (eq .Outcome "refused") (eq .Outcome "error")}} error{{end}}">{{.Message}}</p>{{end}}
       <details><summary>Arguments</summary><pre>{{.Args}}</pre></details>
     </li>
