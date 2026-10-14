@@ -39,10 +39,10 @@ valetkey sits between an AI agent and your ops tools. It acts with each person's
 valetkey makes outbound requests to servers that users choose, so every request to one goes through a single guarded client: tool calls, OAuth discovery, client registration, token exchange and refresh.
 
 - https only. http is allowed only for hosts in `UPSTREAM_ALLOW_HOSTS`.
-- The address is checked when the connection opens, after DNS resolves, so a name that changes its answer cannot slip through. Refused: loopback, private, link-local (including cloud metadata), CGNAT, documentation, NAT64, 6to4, Teredo, SIIT and similar ranges. A name resolves to at most 3 addresses, tried under one 10 second connect deadline.
-- Up to 3 redirects, each one checked again. A redirect to another origin is refused, so credentials go only to the server's own origin.
+- The address is checked when the connection opens, after DNS resolves, so a name that changes its answer cannot slip through. Every resolved address is checked, and one non-public address refuses the name. Refused: loopback, private, link-local (including cloud metadata), CGNAT, documentation, NAT64, 6to4, Teredo, SIIT and similar ranges. At most 3 addresses are tried, under one 10 second connect deadline.
+- Up to 3 redirects, each one checked again for its URL form and its address. For MCP calls, a redirect to another origin is refused, so the server's credential goes only to its own origin. OAuth requests (discovery, registration, token exchange, refresh) get the same re-checks but are not limited to one origin. The client secret and refresh token go to the authorization server, which is a different origin from the MCP server.
 - `HTTP_PROXY` and similar variables are ignored.
-- Responses are cut off at 1 MiB.
+- A response body over 1 MiB is an error and the request fails. This applies to every response, including MCP streams.
 - `UPSTREAM_ALLOW_HOSTS` takes exact host names. An allowed name trusts whatever its DNS returns, private addresses included, and is reachable on any port. Only the operator sets it.
 - On an IPv6-only network with NAT64, IPv4-only servers cannot be reached, because `64:ff9b::/96` is refused.
 
@@ -50,7 +50,7 @@ The authorization endpoint of an OAuth server is only a redirect for the person'
 
 ### Upstream credentials and OAuth
 
-- The caller's bearer token is never sent to an MCP server. Only the server's own credential is, and only to its own origin.
+- The caller's bearer token is never sent to an MCP server. Only the server's own credential is, and only to its own origin for MCP calls.
 - Credentials for a user's MCP servers are sealed with `VAULT_KEY` like the others.
 - The OAuth `state` carries only the server's ID and a nonce, signed and tied to the browser session. The PKCE verifier and any client secret are kept sealed in the stored credentials, never in a URL.
 - Pages show a plain reason when a server fails, never raw error text or the addresses a name resolved to.

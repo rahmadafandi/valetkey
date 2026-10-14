@@ -87,16 +87,16 @@ Each person can put remote MCP servers of their own behind valetkey, next to the
 Add a server with a name, its URL and a login kind:
 
 - **Token.** A header name (`Authorization` by default) and its value. valetkey stores the value only after it has fetched the server's tools with it.
-- **OAuth.** valetkey signs in to the server the way an MCP client does. It finds the server's authorization server from the `WWW-Authenticate` header of the 401 answer, or from the well-known address, and it needs `S256` in `code_challenge_methods_supported`, so it refuses a server without it. If the server offers dynamic client registration, valetkey registers itself. If not, the page asks for a client ID and secret and shows which host receives them. valetkey uses PKCE and sends `resource` with the authorization, token and refresh requests. It requests no `scope` yet, so a server that insists on scopes may not work. To sign in again, use **Sign in again** on the server's page: the old login keeps working until the new one finishes.
+- **OAuth.** valetkey signs in to the server the way an MCP client does. It finds the server's authorization server from the `WWW-Authenticate` header of the 401 answer, or from the well-known address, and it needs `S256` in `code_challenge_methods_supported`, so it refuses a server without it. If the server offers dynamic client registration, valetkey registers itself. If not, the page asks for a client ID, and a secret if the client has one, and shows which host receives them. valetkey uses PKCE and sends `resource` with the authorization, token and refresh requests. It requests no `scope` yet, so a server that insists on scopes may not work. To sign in again, use **Sign in again** on the server's page: the old login keeps working until the new one finishes.
 - **None.** For a server that needs no login.
 
-The name is lowercase letters, digits and hyphens, up to 24 characters. Agents see each tool as `<server>__<tool>`, so a tool `search` on a server named `docs` appears as `docs__search`.
+The name starts with a lowercase letter or digit, followed by up to 23 lowercase letters, digits or hyphens. Agents see each tool as `<server>__<tool>`, so a tool `search` on a server named `docs` appears as `docs__search`.
 
 ### Approving tools
 
 valetkey fetches the server's tool list and shows every tool with its full description and input schema. Nothing reaches an agent until you press **Approve these tools**, and approving stores exactly the list you were shown. The server writes those descriptions and agents follow them, so read them first.
 
-Servers change. **Refresh** (on the server's page) fetches the list again and shows what is new, changed or removed. Until you approve, your agents keep the list you approved before. A tool the server has dropped stops being offered at once.
+Servers change. **Check for changes** (on the server's page, or **Review tools** when nothing is approved yet) fetches the list again and shows what is new, changed or removed. Until you approve, your agents keep the list you approved before, with one exception: when a review finds that the server no longer lists a tool, valetkey drops that tool right away, since a call to it would fail.
 
 valetkey keeps at most 200 tools per server, and you can add at most 20 servers. A tool is skipped, and listed on the review page, when its input schema is not a JSON object schema or when its prefixed name is not 1 to 64 letters, digits, `_` or `-`. Tools that the MCP SDK drops for an invalid `x-mcp-header` annotation never appear.
 
@@ -118,7 +118,7 @@ An allowed name trusts whatever its DNS returns, private addresses included, and
 
 ### Not proxied
 
-stdio servers, resources, prompts, sampling, elicitation and roots. valetkey declares no client capabilities, so a server cannot ask it for them. It sends `User-Agent: valetkey/<version>` on every request to a server.
+stdio servers, resources, prompts, sampling, elicitation and roots. valetkey declares no client capabilities, so a server cannot ask it for them. It sends `User-Agent: valetkey/<version>` on every request to a server. OAuth token refresh is coordinated within one valetkey process, so running several replicas is not supported for this.
 
 ## Personal access tokens
 
