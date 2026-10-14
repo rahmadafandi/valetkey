@@ -13,18 +13,19 @@ valetkey is not a general MCP gateway. If you want to put many MCP servers behin
 You need an OIDC client from your identity provider (see [Sign-in setup](#sign-in-setup)) with the redirect URI `https://valetkey.example.com/oauth/oidc/callback`, replacing the host with your own.
 
 ```sh
-docker run -d --name valetkey -p 8080:8080 -v valetkey:/data \
+touch .env && chmod 600 .env
+printf 'VAULT_KEY=%s\nSESSION_KEY=%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" >> .env
+
+docker run -d --name valetkey -p 8080:8080 -v valetkey:/data --env-file .env \
   -e PUBLIC_URL=https://valetkey.example.com \
   -e OIDC_ISSUER=https://accounts.google.com \
   -e OIDC_CLIENT_ID=your-client-id \
   -e OIDC_CLIENT_SECRET=your-client-secret \
   -e ALLOWED_DOMAINS=example.com \
-  -e VAULT_KEY=$(openssl rand -hex 32) \
-  -e SESSION_KEY=$(openssl rand -hex 32) \
   ghcr.io/rahmadafandi/valetkey
 ```
 
-Keep the two generated keys. If you lose `VAULT_KEY`, every stored upstream credential becomes unreadable. Put the values in a `.env` file (start from [.env.example](.env.example)) and use `--env-file .env` instead of `-e` once you have more than a few.
+Keep `.env`. It holds `VAULT_KEY` and `SESSION_KEY`, and if you lose `VAULT_KEY`, every stored upstream credential becomes unreadable. Generating the keys inline with `-e VAULT_KEY=$(openssl rand -hex 32)` would make a new key each time you recreate the container, which is why they go into a file. You can move the other variables into the same file too, starting from [.env.example](.env.example).
 
 `PUBLIC_URL` is the address people and agents use to reach the server, with no path and no trailing slash. Put TLS in front of it with your usual reverse proxy.
 
@@ -142,7 +143,7 @@ Arguments are stored cut to 4 KiB and messages to 1 KiB. Credentials are not too
 
 valetkey runs its database migrations at start. `valetkey migrate status` prints which migrations are applied and which are pending. With the Docker image: `docker exec valetkey /valetkey migrate status`.
 
-If the process dies in the middle of a migration, a row can stay in the `bun_migration_locks` table and block the next start. Delete that row and start again.
+valetkey takes a migration lock on every start. If the process dies in the middle of a migration, a row can stay in the `bun_migration_locks` table and block the next start. To recover, stop valetkey and delete the rows: `DELETE FROM bun_migration_locks;`. On Postgres, run that with `psql`. On SQLite, run it with `sqlite3` against `valetkey.db` from the host or another container, since the image has no `sqlite3`, for example `docker run --rm -it -v valetkey:/data alpine sh -c 'apk add --no-cache sqlite && sqlite3 /data/valetkey.db "DELETE FROM bun_migration_locks;"'`. Then start valetkey again.
 
 ## Configuration
 

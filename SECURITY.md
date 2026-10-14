@@ -14,7 +14,7 @@ valetkey sits between an AI agent and your ops tools. It acts with each person's
 - Merging on stale state. `bitbucket_pr_merge` takes `expected_source_commit` and `argocd_sync` takes `expected_revision`. Both refuse when the upstream has moved.
 - Unbounded repeated writes. Each token has a write limit per hour, 20 by default.
 - Silent actions. Every call that reaches a tool, refused ones included, is written to the audit log and shown on `/activity`.
-- A sign-in open to a whole identity provider. The server will not start without `ALLOWED_DOMAINS` or `ALLOWED_EMAILS`, and for Google it also checks the `hd` claim so a consumer account with a company address is refused.
+- A sign-in open to a whole identity provider. The server will not start without `ALLOWED_DOMAINS` or `ALLOWED_EMAILS`, and for Google, when the match comes from `ALLOWED_DOMAINS`, it also checks the `hd` claim so a consumer account with a company address is refused. A match from `ALLOWED_EMAILS` does not use that check.
 
 ### What valetkey does not protect against
 
@@ -27,3 +27,4 @@ valetkey sits between an AI agent and your ops tools. It acts with each person's
 - Upstream credentials are sealed with `VAULT_KEY` before they reach the database. Keep that key out of the database backup.
 - The ID token comes straight from the identity provider's token endpoint over TLS, so valetkey checks its claims (`iss`, `aud`, `email`, `email_verified`) but does not verify the signature, as OpenID Connect Core 3.1.3.7 allows.
 - Personal access tokens are shown once, when you create them. Revoke one on `/tokens` when you no longer need it.
+- `OIDC_TRUST_UNVERIFIED_EMAIL=true` makes valetkey accept whatever email the identity provider reports. Entra's email can be edited by the account owner. With this setting, prefer `ALLOWED_EMAILS`, or an issuer restricted to your own tenant.
