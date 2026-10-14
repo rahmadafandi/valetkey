@@ -82,6 +82,12 @@ func TestOIDCEmail(t *testing.T) {
 		}, want: "a@example.com"},
 		"google consumer, company address": {issuer: googleIssuer, claims: func(string) map[string]any { return idClaims("a@example.com", nil)(googleIssuer) }},
 		"google consumer, allowed email":   {issuer: googleIssuer, claims: func(string) map[string]any { return idClaims("contractor@gmail.com", nil)(googleIssuer) }, want: "contractor@gmail.com"},
+		"google iss without scheme": {issuer: googleIssuer, claims: func(string) map[string]any {
+			return idClaims("a@example.com", map[string]any{"hd": "example.com"})("accounts.google.com")
+		}, want: "a@example.com"},
+		"other issuer without scheme": {claims: func(iss string) map[string]any {
+			return idClaims("a@example.com", nil)(strings.TrimPrefix(iss, "http://"))
+		}},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ts := fakeIdP(t, tc.claims, "")

@@ -89,7 +89,8 @@ func (o *OIDC) Email(ctx context.Context, code string) (string, error) {
 	if err := json.Unmarshal(payload, &c); err != nil {
 		return "", errors.New("identity provider returned an unreadable ID token")
 	}
-	if c.Iss != o.Issuer {
+	// Google documents both forms of its iss claim.
+	if c.Iss != o.Issuer && !(o.Issuer == googleIssuer && c.Iss == "accounts.google.com") {
 		return "", fmt.Errorf("ID token was issued by %q, not %q", c.Iss, o.Issuer)
 	}
 	if !audience(c.Aud, o.Config.ClientID) {
