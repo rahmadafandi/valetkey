@@ -541,3 +541,30 @@ func TestConnectorURL(t *testing.T) {
 		t.Errorf("got %q", text)
 	}
 }
+
+type badSchema struct{ fake }
+
+func (badSchema) Tools() []Tool {
+	run := func(context.Context, Creds, json.RawMessage) (string, error) { return "ok", nil }
+	return []Tool{
+		{Name: "bad_string", Schema: map[string]any{"type": "string"}, Run: run},
+		{Name: "bad_good", Schema: Object(nil), Run: run},
+	}
+}
+
+func TestNewServerSkipsToolTheSDKRefuses(t *testing.T) {
+	srv := NewServer([]Integration{badSchema{}}, nil, "https://center.test", slog.New(slog.DiscardHandler), nil, nil)
+	ct, st := mcp.NewInMemoryTransports()
+	if _, err := srv.Connect(context.Background(), st, nil); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "t", Version: "0"}, nil).Connect(context.Background(), ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer cs.Close()
+	res, err := cs.ListTools(context.Background(), nil)
+	if err != nil || len(res.Tools) != 1 || res.Tools[0].Name != "bad_good" {
+		t.Fatalf("%v %+v", err, res)
+	}
+}

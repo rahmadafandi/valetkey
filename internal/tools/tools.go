@@ -91,11 +91,22 @@ func NewServer(ints []Integration, load LoadCreds, publicURL string, log *slog.L
 	for _, in := range ints {
 		for _, t := range in.Tools() {
 			if r == nil || r.Allows(t.Name) {
-				srv.AddTool(toolDef(t), handler(in, t, load, publicURL, log, audit))
+				addTool(srv, in, t, load, publicURL, log, audit)
 			}
 		}
 	}
 	return srv
+}
+
+// addTool registers t, or logs and skips it when the SDK rejects it (by panicking),
+// so one bad proxied tool cannot take down the caller's whole server.
+func addTool(srv *mcp.Server, in Integration, t Tool, load LoadCreds, publicURL string, log *slog.Logger, audit Audit) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Error("skipping tool the MCP server refused", "tool", t.Name, "err", r)
+		}
+	}()
+	srv.AddTool(toolDef(t), handler(in, t, load, publicURL, log, audit))
 }
 
 func toolDef(t Tool) *mcp.Tool {

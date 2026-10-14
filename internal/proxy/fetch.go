@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strings"
@@ -65,17 +66,23 @@ type Skipped struct {
 
 type authTransport struct {
 	base          http.RoundTripper
+	origin        *url.URL // the credential is only ever sent here
 	header, value string
 	unauthorized  atomic.Bool
 }
 
+func sameOrigin(a, b *url.URL) bool {
+	return strings.EqualFold(a.Scheme, b.Scheme) && strings.EqualFold(a.Host, b.Host)
+}
+
 func (a *authTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	if a.header != "" {
+	if a.header != "" && sameOrigin(r.URL, a.origin) {
 		r = r.Clone(r.Context())
 		r.Header.Set(a.header, a.value)
 	}
 	resp, err := a.base.RoundTrip(r)
-	if err == nil && (resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden) {
+	// Only 401: a 403 can be insufficient_scope for one tool, not a rejected login.
+	if err == nil && resp.StatusCode == http.StatusUnauthorized {
 		a.unauthorized.Store(true)
 	}
 	return resp, err
@@ -91,11 +98,12 @@ func upstreamErr(u store.Upstream, at *authTransport, err error) error {
 
 // connect runs initialize against the upstream with its own credential, never the caller's.
 func (p *Proxy) connect(ctx context.Context, u store.Upstream, c tools.Creds) (*mcp.ClientSession, *authTransport, error) {
-	if _, err := p.Guard.CheckURL(u.URL); err != nil {
+	endpoint, err := p.Guard.CheckURL(u.URL)
+	if err != nil {
 		return nil, nil, fmt.Errorf("%s: %w", u.Name, err)
 	}
 	guarded := p.Guard.Client()
-	at := &authTransport{base: guarded.Transport}
+	at := &authTransport{base: guarded.Transport, origin: endpoint}
 	switch u.Auth {
 	case "token":
 		at.header, at.value = c["header"], c["value"]
@@ -107,10 +115,18 @@ func (p *Proxy) connect(ctx context.Context, u store.Upstream, c tools.Creds) (*
 	}
 	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
 	defer cancel()
-	client := mcp.NewClient(&mcp.Implementation{Name: "valetkey", Version: version.String()}, nil)
+	// An empty set, not nil: nil makes the SDK advertise roots.
+	client := mcp.NewClient(&mcp.Implementation{Name: "valetkey", Version: version.String()},
+		&mcp.ClientOptions{Capabilities: &mcp.ClientCapabilities{}})
+	checkRedirect := func(req *http.Request, via []*http.Request) error {
+		if !sameOrigin(req.URL, endpoint) {
+			return fmt.Errorf("refusing a redirect away from %s", endpoint.Host)
+		}
+		return guarded.CheckRedirect(req, via)
+	}
 	cs, err := client.Connect(ctx, &mcp.StreamableClientTransport{
 		Endpoint:             u.URL,
-		HTTPClient:           &http.Client{Transport: at, CheckRedirect: guarded.CheckRedirect},
+		HTTPClient:           &http.Client{Transport: at, CheckRedirect: checkRedirect},
 		MaxRetries:           -1,
 		DisableStandaloneSSE: true,
 	}, nil)
@@ -143,6 +159,7 @@ func (p *Proxy) Fetch(ctx context.Context, u store.Upstream, c tools.Creds) ([]C
 		if err != nil {
 			return nil, nil, upstreamErr(u, at, err)
 		}
+		// The SDK client has already dropped tools with invalid x-mcp-header annotations.
 		for _, t := range res.Tools {
 			prefixed, ok := ToolName(u.Name, t.Name)
 			switch {
@@ -159,7 +176,7 @@ func (p *Proxy) Fetch(ctx context.Context, u store.Upstream, c tools.Creds) ([]C
 			seen[t.Name] = true
 			schema, err := canonical(t.InputSchema)
 			if err != nil {
-				skipped = append(skipped, Skipped{t.Name, "its input schema is not a JSON object"})
+				skipped = append(skipped, Skipped{t.Name, "its input schema is not a JSON object schema"})
 				continue
 			}
 			kept = append(kept, Candidate{Name: t.Name, Prefixed: prefixed, Description: t.Description, Schema: schema, Writes: Writes(t.Annotations)})
@@ -172,6 +189,7 @@ func (p *Proxy) Fetch(ctx context.Context, u store.Upstream, c tools.Creds) ([]C
 }
 
 // canonical re-encodes a schema with sorted keys, so equal schemas compare equal byte for byte.
+// It refuses anything but an object schema, which the SDK's AddTool panics on.
 func canonical(v any) (json.RawMessage, error) {
 	if raw, ok := v.(json.RawMessage); ok {
 		if err := json.Unmarshal(raw, &v); err != nil {
@@ -181,8 +199,8 @@ func canonical(v any) (json.RawMessage, error) {
 	if v == nil {
 		return json.RawMessage(`{"type":"object"}`), nil
 	}
-	if _, ok := v.(map[string]any); !ok {
-		return nil, errors.New("schema is not an object")
+	if m, ok := v.(map[string]any); !ok || m["type"] != "object" {
+		return nil, errors.New(`schema is not a JSON object with "type": "object"`)
 	}
 	return json.Marshal(v)
 }

@@ -29,6 +29,13 @@ type Proxy struct {
 	Log       *slog.Logger
 }
 
+func (p *Proxy) log() *slog.Logger {
+	if p.Log == nil {
+		return slog.New(slog.DiscardHandler)
+	}
+	return p.Log
+}
+
 // CredsSystem is the credentials row holding an upstream's login.
 func CredsSystem(upstreamID string) string { return "upstream:" + upstreamID }
 
@@ -137,8 +144,8 @@ func (i *integration) Tools() []tools.Tool {
 	for _, row := range i.tools {
 		name, ok := ToolName(i.u.Name, row.Name)
 		var schema map[string]any
-		if err := json.Unmarshal([]byte(row.InputSchema), &schema); !ok || err != nil || schema == nil {
-			i.p.Log.Warn("skipping unusable approved tool", "upstream", i.u.ID, "tool", row.Name)
+		if _, err := canonical(json.RawMessage(row.InputSchema)); !ok || err != nil || json.Unmarshal([]byte(row.InputSchema), &schema) != nil {
+			i.p.log().Warn("skipping unusable approved tool", "upstream", i.u.ID, "tool", row.Name)
 			continue
 		}
 		out = append(out, tools.Tool{

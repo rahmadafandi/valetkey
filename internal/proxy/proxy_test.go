@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -99,6 +100,9 @@ func TestFetch(t *testing.T) {
 	if ua != version.UserAgent() || auth != "Bearer s3cret" || client != "valetkey" {
 		t.Fatalf("fake saw ua=%q auth=%q client=%q", ua, auth, client)
 	}
+	if f.sawRoots.Load() {
+		t.Fatal("client advertised the roots capability")
+	}
 
 	if _, _, err := p.Fetch(ctx, u, tools.Creds{"header": "Authorization", "value": "Bearer wrong"}); !errors.Is(err, upstream.ErrUnauthorized) {
 		t.Fatalf("wrong token: %v", err)
@@ -130,8 +134,9 @@ func TestFetchCapAndDuplicates(t *testing.T) {
 	}
 }
 
-// TestFetchDuplicate uses a hand-written upstream, since the SDK server cannot list a name twice.
-func TestFetchDuplicate(t *testing.T) {
+// rawUpstream is a hand-written MCP server listing toolsJSON verbatim, for
+// lists the SDK server cannot produce (duplicate names, non-object schemas).
+func rawUpstream(t *testing.T, toolsJSON string) string {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct {
 			ID     json.RawMessage `json:"id"`
@@ -147,17 +152,93 @@ func TestFetchDuplicate(t *testing.T) {
 		case "initialize":
 			reply = `"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"raw","version":"0"}}`
 		case "tools/list":
-			reply = `"result":{"tools":[{"name":"echo","inputSchema":{"type":"object"}},{"name":"echo","description":"again","inputSchema":{"type":"object"}}]}`
+			reply = `"result":{"tools":` + toolsJSON + `}`
 		}
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprintf(w, `{"jsonrpc":"2.0","id":%s,%s}`, req.ID, reply)
 	}))
-	defer srv.Close()
-	f := &fake{Guard: &netguard.Guard{AllowHosts: []string{"127.0.0.1"}}}
-	p := newProxy(t, f)
-	cs, skipped, err := p.Fetch(ctx, store.Upstream{Name: "dup", URL: srv.URL, Auth: "none"}, nil)
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+func TestFetchDuplicate(t *testing.T) {
+	p := newProxy(t, &fake{Guard: &netguard.Guard{AllowHosts: []string{"127.0.0.1"}}})
+	url := rawUpstream(t, `[{"name":"echo","inputSchema":{"type":"object"}},{"name":"echo","description":"again","inputSchema":{"type":"object"}}]`)
+	cs, skipped, err := p.Fetch(ctx, store.Upstream{Name: "dup", URL: url, Auth: "none"}, nil)
 	if err != nil || len(cs) != 1 || cs[0].Description != "" || len(skipped) != 1 || skipped[0].Name != "echo" {
 		t.Fatalf("%v %+v %+v", err, cs, skipped)
+	}
+}
+
+func TestFetchSkipsNonObjectSchemas(t *testing.T) {
+	p := newProxy(t, &fake{Guard: &netguard.Guard{AllowHosts: []string{"127.0.0.1"}}})
+	url := rawUpstream(t, `[{"name":"ok","inputSchema":{"type":"object"}},{"name":"empty","inputSchema":{}},{"name":"str","inputSchema":{"type":"string"}}]`)
+	cs, skipped, err := p.Fetch(ctx, store.Upstream{Name: "raw", URL: url, Auth: "none"}, nil)
+	if err != nil || len(cs) != 1 || cs[0].Name != "ok" || len(skipped) != 2 {
+		t.Fatalf("%v %+v %+v", err, cs, skipped)
+	}
+	for _, sk := range skipped {
+		if sk.Reason != "its input schema is not a JSON object schema" {
+			t.Errorf("%s: %q", sk.Name, sk.Reason)
+		}
+	}
+}
+
+func TestStoredNonObjectSchemaIsSkipped(t *testing.T) {
+	f := newFake(t, fakeOpts{Tools: []fakeTool{{Name: "echo"}}})
+	p := newProxy(t, f)
+	p.Log = nil
+	user, _ := p.Store.UpsertUser(ctx, "a@example.com")
+	u, err := p.Store.CreateUpstream(ctx, store.Upstream{UserID: user.ID, Name: "old", URL: f.URL, Auth: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := []store.UpstreamTool{{Name: "echo", InputSchema: `{"type":"object"}`}, {Name: "bad", InputSchema: `{}`}, {Name: "str", InputSchema: `{"type":"string"}`}}
+	if err := p.Store.ApproveTools(ctx, user.ID, u.ID, rows); err != nil {
+		t.Fatal(err)
+	}
+	ints, err := p.Integrations(ctx, user.ID)
+	if err != nil || len(ints) != 1 {
+		t.Fatalf("%v %d", err, len(ints))
+	}
+	if ts := ints[0].Tools(); len(ts) != 1 || ts[0].Name != "old__echo" {
+		t.Fatalf("tools: %+v", ts)
+	}
+}
+
+func TestRedirectKeepsCredentialHome(t *testing.T) {
+	var leaked, hits atomic.Int32
+	elsewhere := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if r.Header.Get("Authorization") != "" {
+			leaked.Add(1)
+		}
+		http.Error(w, "nope", http.StatusNotFound)
+	}))
+	defer elsewhere.Close()
+	home := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, elsewhere.URL+"/mcp", http.StatusTemporaryRedirect)
+	}))
+	defer home.Close()
+	p := newProxy(t, &fake{Guard: &netguard.Guard{AllowHosts: []string{"127.0.0.1"}}})
+	_, _, err := p.Fetch(ctx, store.Upstream{Name: "hop", URL: home.URL + "/mcp", Auth: "token"}, tools.Creds{"header": "Authorization", "value": "Bearer s3cret"})
+	if err == nil {
+		t.Fatal("fetch followed a redirect to another origin")
+	}
+	if hits.Load() != 0 || leaked.Load() != 0 {
+		t.Fatalf("other origin got %d requests, %d with the credential", hits.Load(), leaked.Load())
+	}
+}
+
+func TestForbiddenIsNotUnauthorized(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "insufficient_scope", http.StatusForbidden)
+	}))
+	defer srv.Close()
+	p := newProxy(t, &fake{Guard: &netguard.Guard{AllowHosts: []string{"127.0.0.1"}}})
+	_, _, err := p.Fetch(ctx, store.Upstream{Name: "scoped", URL: srv.URL, Auth: "none"}, nil)
+	if err == nil || errors.Is(err, upstream.ErrUnauthorized) {
+		t.Fatalf("403: %v", err)
 	}
 }
 

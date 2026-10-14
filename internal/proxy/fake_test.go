@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -42,6 +43,7 @@ type fake struct {
 	userAgent  string
 	auth       string
 	clientName string
+	sawRoots   atomic.Bool
 }
 
 func newFake(t *testing.T, opts fakeOpts) *fake {
@@ -67,6 +69,9 @@ func newFake(t *testing.T, opts fakeOpts) *fake {
 			} `json:"params"`
 		}
 		_ = json.Unmarshal(body, &msg)
+		if bytes.Contains(body, []byte(`"roots"`)) {
+			f.sawRoots.Store(true)
+		}
 		f.mu.Lock()
 		f.userAgent, f.auth = r.UserAgent(), r.Header.Get(opts.Header)
 		if n := msg.Params.ClientInfo.Name + msg.Params.Meta.ClientInfo.Name; n != "" {
