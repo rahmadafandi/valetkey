@@ -14,7 +14,7 @@ You need an OIDC client from your identity provider (see [Sign-in setup](#sign-i
 
 ```sh
 touch .env && chmod 600 .env
-printf 'VAULT_KEY=%s\nSESSION_KEY=%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" >> .env
+grep -q '^VAULT_KEY=' .env || printf 'VAULT_KEY=%s\nSESSION_KEY=%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" >> .env
 
 docker run -d --name valetkey -p 8080:8080 -v valetkey:/data --env-file .env \
   -e PUBLIC_URL=https://valetkey.example.com \

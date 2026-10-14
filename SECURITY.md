@@ -27,4 +27,4 @@ valetkey sits between an AI agent and your ops tools. It acts with each person's
 - Upstream credentials are sealed with `VAULT_KEY` before they reach the database. Keep that key out of the database backup.
 - The ID token comes straight from the identity provider's token endpoint over TLS, so valetkey checks its claims (`iss`, `aud`, `email`, `email_verified`) but does not verify the signature, as OpenID Connect Core 3.1.3.7 allows.
 - Personal access tokens are shown once, when you create them. Revoke one on `/tokens` when you no longer need it.
-- `OIDC_TRUST_UNVERIFIED_EMAIL=true` makes valetkey accept whatever email the identity provider reports. Entra's email can be edited by the account owner. With this setting, prefer `ALLOWED_EMAILS`, or an issuer restricted to your own tenant.
+- `OIDC_TRUST_UNVERIFIED_EMAIL=true` makes valetkey accept whatever email the identity provider reports. Entra's `email` claim is not verified and can change over time. With this setting, prefer `ALLOWED_EMAILS`, or an issuer restricted to your own tenant.
