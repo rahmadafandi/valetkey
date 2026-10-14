@@ -59,6 +59,8 @@ const (
 	MaxOutput      = 100 * 1024
 )
 
+var auditTimeout = 5 * time.Second
+
 // Audit stores every tool call and answers write-budget questions.
 type Audit interface {
 	RecordCall(ctx context.Context, c store.ToolCall) error
@@ -150,8 +152,12 @@ func handler(in Integration, t Tool, load LoadCreds, publicURL string, log *slog
 			if r != nil {
 				c.TokenID, c.TokenName = r.TokenID, r.Name
 			}
-			// A cancelled request must not drop the record of a call that already ran.
-			if aerr := audit.RecordCall(context.WithoutCancel(ctx), c); aerr != nil {
+			// A cancelled request must not drop the record of a call that already ran,
+			// and a stalled database must not hold the response.
+			actx, cancel := context.WithTimeout(context.WithoutCancel(ctx), auditTimeout)
+			aerr := audit.RecordCall(actx, c)
+			cancel()
+			if aerr != nil {
 				log.Error("audit record failed", "tool", t.Name, "err", aerr)
 			}
 		}

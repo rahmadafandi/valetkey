@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	mcpauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -301,9 +302,14 @@ type fakeAudit struct {
 	calls  []store.ToolCall
 	writes int
 	fail   bool
+	block  bool
 }
 
-func (f *fakeAudit) RecordCall(_ context.Context, c store.ToolCall) error {
+func (f *fakeAudit) RecordCall(ctx context.Context, c store.ToolCall) error {
+	if f.block {
+		<-ctx.Done()
+		return ctx.Err()
+	}
 	if f.fail {
 		return errors.New("db down")
 	}
@@ -373,5 +379,34 @@ func TestAuditTruncatesArgsAndMessage(t *testing.T) {
 	}
 	if len(c.Message) > 1024+60 || !strings.Contains(c.Message, "[truncated") {
 		t.Errorf("message len %d", len(c.Message))
+	}
+}
+
+func TestAuditStallDoesNotHangCall(t *testing.T) {
+	old := auditTimeout
+	auditTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { auditTimeout = old })
+	cs := connect(t, serveAudit(t, &fakeAudit{block: true}), "t1")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if text, isErr := call(t, cs, "fake_echo", map[string]any{"msg": "hi"}); isErr || text != "secret1:hi" {
+			t.Errorf("%q isErr=%v", text, isErr)
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("call hung on a stalled audit write")
+	}
+}
+
+func TestAuditTruncationKeepsValidUTF8(t *testing.T) {
+	a := &fakeAudit{}
+	cs := connect(t, serveAudit(t, a), "pat")
+	call(t, cs, "bitbucket_fake", map[string]any{"repo": strings.Repeat("日", 3000)})
+	c := a.calls[0]
+	if !utf8.ValidString(c.Args) || !utf8.ValidString(c.Message) || !strings.Contains(c.Args, "[truncated") {
+		t.Errorf("args valid=%v message valid=%v", utf8.ValidString(c.Args), utf8.ValidString(c.Message))
 	}
 }
