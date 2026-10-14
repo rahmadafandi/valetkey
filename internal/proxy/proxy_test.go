@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -441,5 +443,47 @@ func TestNoneAuthNeedsNoCreds(t *testing.T) {
 	}
 	if _, auth, _ := f.seen(); auth != "" {
 		t.Fatalf("sent Authorization %q", auth)
+	}
+}
+
+// A failed call tells the agent a fixed sentence; the raw error, which can name
+// the address a host resolves to or the resolver, only reaches the log.
+func TestCallErrorHidesAddresses(t *testing.T) {
+	f := newFake(t, fakeOpts{Tools: []fakeTool{{Name: "echo"}}})
+	f.Guard.Lookup = func(ctx context.Context, host string) ([]netip.Addr, error) {
+		switch host {
+		case "db.internal":
+			return []netip.Addr{netip.MustParseAddr("10.0.0.5")}, nil
+		case "gone.example":
+			return nil, &net.DNSError{Err: "no such host", Name: host, Server: "10.0.0.2:53", IsNotFound: true}
+		}
+		return net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	}
+	p := newProxy(t, f)
+	var logged bytes.Buffer
+	p.Log = slog.New(slog.NewTextHandler(&logged, nil))
+	user, _ := p.Store.UpsertUser(ctx, "a@example.com")
+	for _, c := range []struct{ name, url, want string }{
+		{"db", "https://db.internal/mcp", "db: " + Reason(netguard.ErrNotPublic)},
+		{"gone", "https://gone.example/mcp", "gone: " + Reason(&net.DNSError{})},
+	} {
+		u, err := p.Store.CreateUpstream(ctx, store.Upstream{UserID: user.ID, Name: c.name, URL: c.url, Auth: "none"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := p.Store.ApproveTools(ctx, user.ID, u.ID, []store.UpstreamTool{{Name: "echo", InputSchema: `{"type":"object"}`}}); err != nil {
+			t.Fatal(err)
+		}
+		ints, _ := p.Integrations(ctx, user.ID)
+		_, err = call(t, p, user.ID, ints, c.name+"__echo", `{}`)
+		if err == nil || err.Error() != c.want {
+			t.Errorf("%s: got %v, want %q", c.name, err, c.want)
+		}
+		if !strings.Contains(logged.String(), "upstream="+u.ID) {
+			t.Errorf("%s: log lacks the upstream: %s", c.name, logged.String())
+		}
+	}
+	if log := logged.String(); !strings.Contains(log, "10.0.0.5") || !strings.Contains(log, "10.0.0.2:53") || !strings.Contains(log, "user="+user.ID) {
+		t.Errorf("log lacks the raw errors: %s", log)
 	}
 }

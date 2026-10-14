@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -172,7 +173,7 @@ func (i *integration) caller(tool string) func(ctx context.Context, c tools.Cred
 		if oauth && expiring(c) {
 			var err error
 			if c, err = i.p.refresh(ctx, i.userID, i.u, c["access_token"]); err != nil {
-				return "", err
+				return "", i.safe(tool, err)
 			}
 			refreshed = true
 		}
@@ -180,12 +181,45 @@ func (i *integration) caller(tool string) func(ctx context.Context, c tools.Cred
 		// A 401 comes before the upstream runs the tool, so retrying cannot repeat a write.
 		if oauth && !refreshed && errors.Is(err, upstream.ErrUnauthorized) {
 			if c, err = i.p.refresh(ctx, i.userID, i.u, c["access_token"]); err != nil {
-				return "", err
+				return "", i.safe(tool, err)
 			}
 			out, err = i.call(ctx, tool, c, args)
 		}
-		return out, err
+		return out, i.safe(tool, err)
 	}
+}
+
+// toolError is the upstream's own isError answer, which the agent sees as is.
+type toolError string
+
+func (e toolError) Error() string { return string(e) }
+
+// safe keeps what an agent and the activity page may see: the upstream's own
+// error text, a missing or rejected login, or a fixed sentence. The raw error
+// can name the address a host resolves to, or the resolver, so it is only logged.
+func (i *integration) safe(tool string, err error) error {
+	var te toolError
+	switch {
+	case err == nil, errors.As(err, &te), errors.Is(err, upstream.ErrUnauthorized), errors.Is(err, tools.ErrNotConnected):
+		return err
+	}
+	i.p.log().Warn("upstream tool call failed", "user", i.userID, "upstream", i.u.ID, "tool", tool, "err", err)
+	return fmt.Errorf("%s: %s", i.u.Name, Reason(err))
+}
+
+// Reason is a fixed sentence for why talking to an upstream failed, safe to
+// show to users and agents, unlike the error itself.
+func Reason(err error) string {
+	var netErr net.Error
+	switch {
+	case errors.Is(err, netguard.ErrNotPublic):
+		return "This address is not on the public internet, and whoever runs valetkey has not allowed it."
+	case errors.Is(err, upstream.ErrUnauthorized):
+		return "The server refused this login. Check it and try again."
+	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr):
+		return "valetkey could not reach the server. Check the address, or try again later."
+	}
+	return "valetkey could not talk to the server. Try again later, or check with whoever runs it."
 }
 
 func (i *integration) call(ctx context.Context, tool string, c tools.Creds, args json.RawMessage) (string, error) {
@@ -203,7 +237,7 @@ func (i *integration) call(ctx context.Context, tool string, c tools.Creds, args
 		if out == "" {
 			out = "the upstream reported an error"
 		}
-		return "", errors.New(out)
+		return "", toolError(out)
 	}
 	return out, nil
 }

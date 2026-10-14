@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/rahmadafandi/valetkey/internal/auth"
 	"github.com/rahmadafandi/valetkey/internal/config"
+	"github.com/rahmadafandi/valetkey/internal/proxy"
 	"github.com/rahmadafandi/valetkey/internal/store"
 )
 
@@ -242,6 +244,14 @@ func TestProxiedToolEndToEnd(t *testing.T) {
 	if err := st.ApproveTools(ctx, u.ID, gh.ID, []store.UpstreamTool{{Name: "echo", Description: "Echo back.", InputSchema: `{"type":"object"}`}}); err != nil {
 		t.Fatal(err)
 	}
+	// A server whose name does not resolve: the DNS error names the resolver.
+	db, err := st.CreateUpstream(ctx, store.Upstream{UserID: u.ID, Name: "db", URL: "https://db.invalid/mcp", Auth: "none"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.ApproveTools(ctx, u.ID, db.ID, []store.UpstreamTool{{Name: "echo", InputSchema: `{"type":"object"}`}}); err != nil {
+		t.Fatal(err)
+	}
 	rec := httptest.NewRecorder()
 	(&auth.Server{Signer: auth.NewSigner(cfg.SessionKey), PublicURL: pub}).SetSession(rec, u)
 	cookie := rec.Result().Cookies()[0]
@@ -262,7 +272,7 @@ func TestProxiedToolEndToEnd(t *testing.T) {
 	if code, page := do("GET", "/tokens", nil); code != 200 || !strings.Contains(page, `value="github__echo"`) {
 		t.Fatalf("token form does not offer github__echo: %d", code)
 	}
-	code, page := do("POST", "/tokens", url.Values{"name": {"bot"}, "tools": {"github__echo"}, "expiry": {"7"}})
+	code, page := do("POST", "/tokens", url.Values{"name": {"bot"}, "tools": {"github__echo", "db__echo"}, "expiry": {"7"}})
 	m := regexp.MustCompile(`<pre class="key">(vk_[A-Z0-9]+)</pre>`).FindStringSubmatch(page)
 	if code != 200 || m == nil {
 		t.Fatalf("create token: %d", code)
@@ -277,7 +287,15 @@ func TestProxiedToolEndToEnd(t *testing.T) {
 	if err != nil || res.IsError || res.Content[0].(*mcp.TextContent).Text != `upstream says {"q":"hi"}` {
 		t.Fatalf("proxied call: %+v %v", res, err)
 	}
-	if code, page := do("GET", "/activity", nil); code != 200 || !strings.Contains(page, "<code>github__echo</code>") || !strings.Contains(page, "token bot") {
+	res, err = cs.CallTool(ctx, &mcp.CallToolParams{Name: "db__echo", Arguments: map[string]any{}})
+	if err != nil || !res.IsError || res.Content[0].(*mcp.TextContent).Text != "db: "+proxy.Reason(&net.DNSError{}) {
+		t.Fatalf("unreachable call: %+v %v", res.Content[0], err)
+	}
+	code, page = do("GET", "/activity", nil)
+	if code != 200 || !strings.Contains(page, "<code>github__echo</code>") || !strings.Contains(page, "token bot") {
 		t.Errorf("activity does not list the proxied call: %d", code)
+	}
+	if !strings.Contains(page, "<code>db__echo</code>") || strings.Contains(page, "lookup") || strings.Contains(page, ":53") {
+		t.Errorf("activity shows the raw DNS error or lacks the failed call:\n%s", page)
 	}
 }

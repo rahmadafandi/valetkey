@@ -2,19 +2,16 @@ package web
 
 import (
 	"bytes"
-	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
-	"net"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/rahmadafandi/valetkey/internal/netguard"
 	"github.com/rahmadafandi/valetkey/internal/proxy"
 	"github.com/rahmadafandi/valetkey/internal/store"
 	"github.com/rahmadafandi/valetkey/internal/tools"
@@ -411,16 +408,7 @@ func (h *Web) login(w http.ResponseWriter, r *http.Request, u store.User, up sto
 // internal host resolves to.
 func (h *Web) reason(u store.User, up store.Upstream, what string, err error) string {
 	h.Log.Warn("upstream "+what+" failed", "user", u.Email, "upstream", up.ID, "err", err)
-	var netErr net.Error
-	switch {
-	case errors.Is(err, netguard.ErrNotPublic):
-		return "This address is not on the public internet, and whoever runs valetkey has not allowed it."
-	case errors.Is(err, upstream.ErrUnauthorized):
-		return "The server refused this login. Check it and try again."
-	case errors.Is(err, context.DeadlineExceeded), errors.As(err, &netErr):
-		return "valetkey could not reach the server. Check the address, or try again later."
-	}
-	return "valetkey could not talk to the server. Try again later, or check with whoever runs it."
+	return proxy.Reason(err)
 }
 
 // callbackErrors are the RFC 6749 section 4.1.2.1 codes, in plain words.
