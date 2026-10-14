@@ -17,10 +17,17 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - name: tags
+        id: tags
+        run: |
+          {
+            echo "list<<EOF"
+            echo "ghcr.io/${GITHUB_REPOSITORY}:${GITHUB_REF_NAME}"
+            case "$GITHUB_REF_NAME" in *-*) ;; *) echo "ghcr.io/${GITHUB_REPOSITORY}:latest" ;; esac
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: |
-            ghcr.io/${{ github.repository }}:${{ github.ref_name }}
-            ghcr.io/${{ github.repository }}:latest
+          tags: ${{ steps.tags.outputs.list }}
