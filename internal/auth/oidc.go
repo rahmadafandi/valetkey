@@ -10,11 +10,15 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"time"
 
 	"golang.org/x/oauth2"
 )
 
 const googleIssuer = "https://accounts.google.com"
+
+// discoveryClient bounds discovery, which runs at startup before the server listens.
+var discoveryClient = &http.Client{Timeout: 15 * time.Second}
 
 // OIDC signs people in with any OpenID Connect provider and decides who may enter.
 type OIDC struct {
@@ -32,7 +36,7 @@ func Discover(ctx context.Context, issuer string) (oauth2.Endpoint, error) {
 	if err != nil {
 		return oauth2.Endpoint{}, err
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := discoveryClient.Do(req)
 	if err != nil {
 		return oauth2.Endpoint{}, fmt.Errorf("oidc discovery: %w", err)
 	}

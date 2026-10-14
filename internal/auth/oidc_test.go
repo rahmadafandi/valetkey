@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/oauth2"
 )
@@ -113,5 +114,22 @@ func TestDiscover(t *testing.T) {
 	bad := fakeIdP(t, idClaims("a@example.com", nil), "https://someone-else.example")
 	if _, err := Discover(context.Background(), bad.URL); err == nil || !strings.Contains(err.Error(), "issuer") {
 		t.Fatalf("issuer mismatch accepted: %v", err)
+	}
+}
+
+func TestDiscoverTimesOut(t *testing.T) {
+	done := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) { <-done }))
+	t.Cleanup(ts.Close)
+	t.Cleanup(func() { close(done) })
+	old := discoveryClient.Timeout
+	discoveryClient.Timeout = 100 * time.Millisecond
+	t.Cleanup(func() { discoveryClient.Timeout = old })
+	start := time.Now()
+	if _, err := Discover(context.Background(), ts.URL); err == nil {
+		t.Fatal("Discover succeeded against a server that never answers")
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Errorf("Discover took %s", d)
 	}
 }
