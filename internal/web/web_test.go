@@ -18,6 +18,8 @@ import (
 
 	"github.com/rahmadafandi/valetkey/internal/auth"
 	"github.com/rahmadafandi/valetkey/internal/creds"
+	"github.com/rahmadafandi/valetkey/internal/netguard"
+	"github.com/rahmadafandi/valetkey/internal/proxy"
 	"github.com/rahmadafandi/valetkey/internal/store"
 	"github.com/rahmadafandi/valetkey/internal/tools"
 	"github.com/rahmadafandi/valetkey/internal/vault"
@@ -46,6 +48,7 @@ func (fakeInt) Tools() []tools.Tool {
 
 type env struct {
 	web    *Web
+	px     *proxy.Proxy
 	url    string
 	creds  creds.Store
 	as     *auth.Server
@@ -61,11 +64,14 @@ func newEnv(t *testing.T) *env {
 	pub := "http://" + ts.Listener.Addr().String()
 	as := &auth.Server{Store: st, Signer: auth.NewSigner([]byte(strings.Repeat("k", 32))), PublicURL: pub,
 		Integrations: []tools.Integration{fakeInt{}}}
+	guard := &netguard.Guard{AllowHosts: []string{"127.0.0.1"}}
+	px := &proxy.Proxy{Store: st, Creds: cr, Guard: guard, PublicURL: pub, Log: slog.New(slog.DiscardHandler)}
 	h := &Web{Auth: as, Creds: cr, Integrations: []tools.Integration{fakeInt{}},
 		Catalog:   []CatalogEntry{{Name: "Example MCP", Description: "Inbox tools", Setup: "npx example-mcp"}},
-		PublicURL: pub, Log: slog.New(slog.DiscardHandler)}
+		PublicURL: pub, Log: slog.New(slog.DiscardHandler), Proxy: px, Guard: guard, UserTools: px.Integrations}
 	mux := http.NewServeMux()
 	h.Routes(mux)
+	mux.Handle("/mcp", tools.HTTPHandler([]tools.Integration{fakeInt{}}, px.Integrations, cr.Load, pub, slog.New(slog.DiscardHandler), st, as.Verify, as.ResourceMetadataURL()))
 	ts.Config.Handler = mux
 	ts.Start()
 	t.Cleanup(ts.Close)
@@ -75,7 +81,7 @@ func newEnv(t *testing.T) *env {
 	}
 	rec := httptest.NewRecorder()
 	as.SetSession(rec, u)
-	return &env{web: h, url: pub, creds: cr, as: as, user: u, cookie: rec.Result().Cookies()[0]}
+	return &env{web: h, px: px, url: pub, creds: cr, as: as, user: u, cookie: rec.Result().Cookies()[0]}
 }
 
 var noFollow = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -328,7 +334,7 @@ func TestEveryPageHasThemeToggle(t *testing.T) {
 	for _, p := range []struct {
 		path     string
 		signedIn bool
-	}{{"/", false}, {"/", true}, {"/connect/fake", true}, {"/tokens", true}, {"/activity", true}} {
+	}{{"/", false}, {"/", true}, {"/connect/fake", true}, {"/tokens", true}, {"/activity", true}, {"/upstreams", true}} {
 		code, body := e.get(t, p.path, p.signedIn)
 		if code != 200 || !strings.Contains(body, "data-theme-toggle") {
 			t.Errorf("%s (signed in %v): no theme toggle (status %d)", p.path, p.signedIn, code)

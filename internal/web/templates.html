@@ -12,6 +12,7 @@
 {{if .Email}}<nav class="nav" aria-label="Pages">
   <a href="/"{{if eq .Here "home"}} aria-current="page"{{end}}>Home</a>
   <a href="/tokens"{{if eq .Here "tokens"}} aria-current="page"{{end}}>Tokens</a>
+  <a href="/upstreams"{{if eq .Here "upstreams"}} aria-current="page"{{end}}>Servers</a>
   <a href="/activity"{{if eq .Here "activity"}} aria-current="page"{{end}}>Activity</a>
   <span class="who">{{.Email}}</span>
   <a href="/logout">Sign out</a>
@@ -63,6 +64,12 @@
     <li class="muted">No tools are switched on for this server yet. Ask whoever runs valetkey to turn one on.</li>
   {{end}}
   </ul>
+</section>
+
+<section class="card" aria-labelledby="ups-h">
+  <h2 id="ups-h">Your MCP servers</h2>
+  <p class="muted">Remote MCP servers you use yourself. Sign in to one here, pick which of its tools to allow, and your agents reach them through valetkey.</p>
+  <p><a href="/upstreams">Manage your MCP servers</a></p>
 </section>
 
 <section class="card" aria-labelledby="tok-h">
@@ -228,4 +235,159 @@
   {{end}}
   </ul>
 </section>
+{{template "bottom"}}{{end}}
+
+
+{{define "upstreams"}}{{template "top" (page "MCP servers" .Email "upstreams")}}
+<h1>Your MCP servers</h1>
+<p class="lead">Add a remote MCP server you use, sign in to it once, and choose which of its tools your agents may call. Tokens and the activity log cover these tools like any other.</p>
+<section class="card" aria-labelledby="list-h">
+  <h2 id="list-h">Servers</h2>
+  <ul class="rows">
+  {{range .Upstreams}}
+    <li>
+      <span class="what"><strong>{{.Name}}</strong><br><code>{{.URL}}</code><br><span class="meta" title="Dates and times are UTC">{{.AuthLabel}} ·
+        {{if .ToolsApprovedAt}}{{.Approved}} tool{{if ne .Approved 1}}s{{end}} approved {{.ToolsApprovedAt.UTC.Format "2006-01-02"}}{{else}}no tools approved yet{{end}}</span></span>
+      <a class="btn small" href="/upstreams/{{.ID}}" aria-label="Manage {{.Name}}">Manage</a>
+    </li>
+  {{else}}
+    <li class="muted">No servers yet. Add one below, then approve the tools you want your agents to have.</li>
+  {{end}}
+  </ul>
+</section>
+<section class="card" aria-labelledby="add-h">
+  <h2 id="add-h">Add a server</h2>
+  {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+  <form method="post" action="/upstreams">
+    <label for="up-name">Name</label>
+    <p class="hint" id="up-name-hint">Lowercase letters, digits and dashes, up to 24. Agents see its tools as <code>name__tool</code>.</p>
+    <input id="up-name" name="name" value="{{.Name}}" placeholder="notes" autocomplete="off" required maxlength="24" pattern="[a-z0-9][a-z0-9\-]{0,23}" aria-describedby="up-name-hint">
+    <label for="up-url">Address</label>
+    <p class="hint" id="up-url-hint">The server's MCP address. valetkey only connects to public addresses, unless whoever runs valetkey allows a host.</p>
+    <input id="up-url" name="url" type="url" value="{{.URL}}" placeholder="https://mcp.example.com/mcp" autocomplete="off" required class="mono" aria-describedby="up-url-hint">
+    <fieldset>
+      <legend>How you sign in to it</legend>
+      <label class="check choice"><input type="radio" name="auth" value="token" {{if eq .Auth "token"}}checked{{end}}>
+        <span><strong>Token</strong><br><span class="muted">You paste an API key or token from the server, and valetkey sends it with each request.</span></span></label>
+      <label class="check choice"><input type="radio" name="auth" value="oauth" {{if eq .Auth "oauth"}}checked{{end}}>
+        <span><strong>Sign-in page</strong><br><span class="muted">valetkey sends you to the server's own sign-in page, and keeps the login it hands back.</span></span></label>
+      <label class="check choice"><input type="radio" name="auth" value="none" {{if eq .Auth "none"}}checked{{end}}>
+        <span><strong>No sign-in</strong><br><span class="muted">The server answers anyone who has its address.</span></span></label>
+    </fieldset>
+    <div class="actions"><button class="btn primary" type="submit" data-busy="Adding…">Add server</button></div>
+  </form>
+  <p class="muted">You can add up to {{.Max}} servers.</p>
+</section>
+{{template "bottom"}}{{end}}
+
+{{define "upstream"}}{{template "top" (page .Up.Name .Email "upstreams")}}
+<h1>{{.Up.Name}}</h1>
+<p class="lead"><code>{{.Up.URL}}</code><br>{{.AuthLabel}}</p>
+{{if ne .Up.Auth "none"}}
+<section class="card" aria-labelledby="signin-h">
+  <h2 id="signin-h">Sign-in</h2>
+  {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+  {{if eq .Up.Auth "token"}}
+    {{if .SignedIn}}<p class="notice">Signed in with a token. To replace it, enter a new one.</p>{{end}}
+    <form method="post" action="/upstreams/{{.Up.ID}}/token">
+      <label for="tk-header">Header name</label>
+      <input id="tk-header" name="header" value="{{.Header}}" autocomplete="off" class="mono">
+      <label for="tk-value">Token</label>
+      <p class="hint" id="tk-value-hint">Include any prefix the server expects, such as <code>Bearer</code> and a space. valetkey checks it with the server before saving it, encrypted.</p>
+      <input id="tk-value" name="value" type="password" autocomplete="off" required aria-describedby="tk-value-hint">
+      <div class="actions"><button class="btn" type="submit" data-busy="Checking with the server…">Check and save</button></div>
+    </form>
+  {{else if .NeedClient}}
+    <p><strong>{{.ClientHost}}</strong> does not let valetkey register itself. Create an OAuth app there with this redirect address:</p>
+    <pre>{{.Callback}}</pre>
+    <p>Then enter its client ID, and its secret if it has one. valetkey stores them encrypted and sends them only to <strong>{{.ClientHost}}</strong>.</p>
+    <form method="post" action="/upstreams/{{.Up.ID}}/oauth">
+      <label for="oc-id">Client ID</label>
+      <input id="oc-id" name="client_id" autocomplete="off" required class="mono">
+      <label for="oc-secret">Client secret <span class="muted">(optional)</span></label>
+      <input id="oc-secret" name="client_secret" type="password" autocomplete="off">
+      <div class="actions"><button class="btn" type="submit" data-busy="Opening the sign-in page…">Sign in</button></div>
+    </form>
+  {{else}}
+    <p class="muted">{{if .SignedIn}}Signed in. Sign in again if the server stopped accepting your login.{{else}}Not signed in yet. valetkey sends you to the server's sign-in page and brings you back here.{{end}}</p>
+    <form method="post" action="/upstreams/{{.Up.ID}}/oauth" class="actions">
+      <button class="btn" type="submit" data-busy="Opening the sign-in page…">{{if .SignedIn}}Sign in again{{else}}Sign in{{end}}</button>
+    </form>
+  {{end}}
+</section>
+{{end}}
+<section class="card" aria-labelledby="tools-h">
+  <h2 id="tools-h">Approved tools</h2>
+  {{if and .Error (eq .Up.Auth "none")}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+  {{if .Tools}}
+  <p class="muted">Your agents see these, exactly as you approved them, until you approve a new list.</p>
+  <ul class="rows">
+  {{range .Tools}}
+    <li class="call">
+      <div><code>{{.Prefixed}}</code> {{if .Writes}}<span class="writes">changes things</span>{{else}}<span class="reads">reads only</span>{{end}}</div>
+      {{if .Description}}<div class="desc">{{.Description}}</div>{{end}}
+    </li>
+  {{end}}
+  </ul>
+  {{else}}
+  <p class="muted">No tools approved yet. Review the server's tools to choose what your agents get.</p>
+  {{end}}
+  <form method="post" action="/upstreams/{{.Up.ID}}/refresh" class="actions">
+    <button class="btn" type="submit" data-busy="Asking the server…">{{if .Tools}}Check for changes{{else}}Review tools{{end}}</button>
+  </form>
+</section>
+<section class="card" aria-labelledby="rm-h">
+  <h2 id="rm-h">Remove this server</h2>
+  <p class="muted">Your agents lose its tools at once, and valetkey deletes your login to it. Tokens that listed its tools keep their other tools.</p>
+  <form method="post" action="/upstreams/{{.Up.ID}}/delete" class="actions">
+    <button class="btn danger" type="submit" data-confirm="Remove {{.Up.Name}}? Your agents lose its tools right away.">Remove {{.Up.Name}}</button>
+  </form>
+</section>
+<p><a href="/upstreams">Back to your MCP servers</a></p>
+{{template "bottom"}}{{end}}
+
+{{define "review"}}{{template "top" (page (printf "Review %s" .Up.Name) .Email "upstreams")}}
+<h1>Review the tools of {{.Up.Name}}</h1>
+<p class="lead">Your agents see each tool below under the name in code, with the description exactly as written. The server wrote these descriptions and agents follow them, so read them before you approve.</p>
+{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+{{if .Compared}}
+  {{if .Unchanged}}<p class="notice">No changes since you last approved.</p>
+  {{else}}<p class="notice">Since you last approved: {{.AddedCount}} new, {{.ChangedCount}} changed, {{len .Removed}} removed. Until you approve, your agents keep the list you approved before, without the removed tools.</p>{{end}}
+{{end}}
+<section class="card" aria-labelledby="offer-h">
+  <h2 id="offer-h">What the server offers</h2>
+  {{if .Tools}}
+  <ul class="rows">
+  {{range .Tools}}
+    <li class="call">
+      <div><code>{{.Prefixed}}</code> {{if .Writes}}<span class="writes">changes things</span>{{else}}<span class="reads">reads only</span>{{end}}
+        {{if .Added}}<span class="diff added">New</span>{{end}}{{if .Changed}}<span class="diff changed">Changed: {{.Changed}}</span>{{end}}</div>
+      {{if .Description}}<div class="desc">{{.Description}}</div>{{else}}<p class="meta">No description.</p>{{end}}
+      <details><summary>Input schema</summary><pre>{{.SchemaText}}</pre></details>
+    </li>
+  {{end}}
+  </ul>
+  {{else}}
+  <p class="muted">This server lists no tools. Approving leaves your agents with none from it.</p>
+  {{end}}
+</section>
+{{if .Removed}}
+<section class="card" aria-labelledby="gone-h">
+  <h2 id="gone-h">Removed by the server</h2>
+  <p class="muted">Your agents already lost these, since calls to them would fail.</p>
+  <ul class="rows">{{range .Removed}}<li><code>{{.}}</code></li>{{end}}</ul>
+</section>
+{{end}}
+{{if .Skipped}}
+<section class="card" aria-labelledby="skip-h">
+  <h2 id="skip-h">Not offered</h2>
+  <p class="muted">The server lists these, but valetkey cannot offer them to agents.</p>
+  <ul class="rows">{{range .Skipped}}<li class="call"><code>{{.Name}}</code><p class="msg">{{.Reason}}</p></li>{{end}}</ul>
+</section>
+{{end}}
+<form method="post" action="/upstreams/{{.Up.ID}}/approve" class="actions">
+  <input type="hidden" name="digest" value="{{.Digest}}">
+  <button class="btn primary" type="submit" data-busy="Checking the list again…">Approve these tools</button>
+  <a href="/upstreams/{{.Up.ID}}">Not now</a>
+</form>
 {{template "bottom"}}{{end}}

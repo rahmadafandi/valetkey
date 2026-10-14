@@ -20,6 +20,8 @@ import (
 
 	"github.com/rahmadafandi/valetkey/internal/auth"
 	"github.com/rahmadafandi/valetkey/internal/creds"
+	"github.com/rahmadafandi/valetkey/internal/netguard"
+	"github.com/rahmadafandi/valetkey/internal/proxy"
 	"github.com/rahmadafandi/valetkey/internal/store"
 	"github.com/rahmadafandi/valetkey/internal/tools"
 	"github.com/rahmadafandi/valetkey/internal/ui"
@@ -67,6 +69,8 @@ type Web struct {
 	AdminEmails  []string
 	PublicURL    string
 	Log          *slog.Logger
+	Proxy        *proxy.Proxy    // the user's own MCP servers
+	Guard        *netguard.Guard // checks a server's URL before anything is stored
 }
 
 func (h *Web) Routes(mux *http.ServeMux) {
@@ -77,6 +81,7 @@ func (h *Web) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /tokens", h.createToken)
 	mux.HandleFunc("POST /tokens/{id}/revoke", h.revokeToken)
 	mux.HandleFunc("GET /activity", h.activity)
+	h.upstreamRoutes(mux)
 }
 
 type systemRow struct {

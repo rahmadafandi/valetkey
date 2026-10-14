@@ -69,6 +69,13 @@ textarea{min-height:96px;line-height:1.45}
 .state{font-weight:600}
 .state.on{color:var(--ok-fg)}
 .writes{display:inline-block;font-size:13px;font-weight:600;color:var(--danger);border:1px solid currentColor;border-radius:6px;padding:0 6px;margin-left:4px}
+.reads{display:inline-block;font-size:13px;font-weight:600;color:var(--muted);border:1px solid var(--edge);border-radius:6px;padding:0 6px;margin-left:4px}
+.diff{display:inline-block;font-size:13px;font-weight:600;border-radius:6px;padding:0 6px;margin-left:4px}
+.diff.added{background:var(--ok-bg);color:var(--ok-fg)}
+.diff.changed{background:var(--dry-bg);color:var(--dry-fg);border:1px solid var(--accent-edge)}
+.desc{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--sunken);border:1px solid var(--line);border-radius:8px;padding:10px 12px;margin:8px 0 0;max-width:65ch}
+.check.choice{align-items:flex-start;padding:8px 0}
+.check.choice input{margin-top:3px}
 .outcome{display:inline-block;padding:1px 8px;border-radius:6px;font-size:13px;font-weight:600;background:var(--sunken);color:var(--text)}
 .outcome.ok{background:var(--ok-bg);color:var(--ok-fg)}
 .outcome.refused,.outcome.error{background:var(--bad-bg);color:var(--bad-fg)}
