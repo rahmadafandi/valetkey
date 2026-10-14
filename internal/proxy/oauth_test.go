@@ -732,3 +732,29 @@ func TestOAuthRegisteredAuthMethod(t *testing.T) {
 		})
 	}
 }
+
+// RFC 6749 section 2.3.1: client ID and secret are form-urlencoded before Basic
+// encoding, so ':', '+' and a space survive the trip.
+func TestOAuthBasicAuthEscaping(t *testing.T) {
+	const id, secret = "my:client+1 a", "s:e+c ret"
+	want := "Basic " + base64.StdEncoding.EncodeToString([]byte("my%3Aclient%2B1+a:s%3Ae%2Bc+ret"))
+	e := newOAuthEnv(t, asOpts{NoRegistration: true}, true)
+	authURL, err := e.p.StartOAuth(ctx, e.userID, e.u, id, secret, "st")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := e.p.FinishOAuth(ctx, e.userID, e.u, e.as.authorize(t, authURL)); err != nil {
+		t.Fatal(err)
+	}
+	c := e.creds(t)
+	c["expiry"] = time.Now().Add(-time.Minute).Format(time.RFC3339)
+	e.save(t, c)
+	if _, err := e.call(t); err != nil {
+		t.Fatal(err)
+	}
+	var auth []string
+	e.as.locked(func() { auth = e.as.tokenAuth })
+	if len(auth) != 2 || auth[0] != want || auth[1] != want {
+		t.Fatalf("exchange and refresh sent %q, want %q", auth, want)
+	}
+}
