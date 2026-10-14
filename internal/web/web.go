@@ -27,7 +27,7 @@ import (
 //go:embed templates.html
 var templatesHTML string
 
-var tmpl = template.Must(template.New("").Parse(templatesHTML))
+var tmpl = template.Must(template.New("").Funcs(template.FuncMap{"list": func(v ...string) []string { return v }}).Parse(templatesHTML))
 
 type CatalogEntry struct {
 	Name        string `json:"name"`
@@ -55,6 +55,7 @@ type Web struct {
 	Creds        creds.Store
 	Integrations []tools.Integration
 	Catalog      []CatalogEntry
+	AdminEmails  []string
 	PublicURL    string
 	Log          *slog.Logger
 }
@@ -66,6 +67,7 @@ func (h *Web) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /tokens", h.tokens)
 	mux.HandleFunc("POST /tokens", h.createToken)
 	mux.HandleFunc("POST /tokens/{id}/revoke", h.revokeToken)
+	mux.HandleFunc("GET /activity", h.activity)
 }
 
 type systemRow struct {
@@ -324,4 +326,26 @@ func render(w http.ResponseWriter, status int, name string, data any) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(status)
 	buf.WriteTo(w)
+}
+
+// activity lists tool calls: the signed-in user's own, or everyone's for an admin.
+func (h *Web) activity(w http.ResponseWriter, r *http.Request) {
+	u, ok := h.Auth.WebUser(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	q := r.URL.Query()
+	admin := slices.Contains(h.AdminEmails, u.Email)
+	f := store.CallFilter{UserID: u.ID, TokenName: q.Get("token"), Tool: q.Get("tool"), Outcome: q.Get("outcome"), Limit: 200}
+	if admin {
+		f.UserID = q.Get("user") // empty means everyone
+	}
+	calls, err := h.Auth.Store.ListCalls(r.Context(), f)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	filtered := f.TokenName != "" || f.Tool != "" || f.Outcome != "" || (admin && f.UserID != "")
+	render(w, http.StatusOK, "activity", map[string]any{"Email": u.Email, "Calls": calls, "Admin": admin, "Filter": f, "Filtered": filtered})
 }

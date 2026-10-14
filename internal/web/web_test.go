@@ -44,6 +44,7 @@ func (fakeInt) Tools() []tools.Tool {
 }
 
 type env struct {
+	web    *Web
 	url    string
 	creds  creds.Store
 	as     *auth.Server
@@ -73,7 +74,7 @@ func newEnv(t *testing.T) *env {
 	}
 	rec := httptest.NewRecorder()
 	as.SetSession(rec, u)
-	return &env{url: pub, creds: cr, as: as, user: u, cookie: rec.Result().Cookies()[0]}
+	return &env{web: h, url: pub, creds: cr, as: as, user: u, cookie: rec.Result().Cookies()[0]}
 }
 
 var noFollow = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
@@ -248,5 +249,48 @@ func TestConnectPageShowsHelp(t *testing.T) {
 	code, body := e.get(t, "/connect/fake", true)
 	if code != 200 || !strings.Contains(body, "Where to find these values") || !strings.Contains(body, "Open Fake &lt;settings&gt; and copy the token.") {
 		t.Errorf("help missing or unescaped (status %d)", code)
+	}
+}
+
+func TestActivity(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	other, _ := e.as.Store.UpsertUser(ctx, "bob@example.com")
+	e.as.Store.RecordCall(ctx, store.ToolCall{UserID: e.user.ID, TokenName: "atlas", Tool: "jenkins_deploy", IsWrite: true, Outcome: "refused", Message: "refused: jenkins_deploy: job \"x\" is outside", Args: `{"jobURL":"<x>"}`})
+	e.as.Store.RecordCall(ctx, store.ToolCall{UserID: e.user.ID, Tool: "loki_query", Outcome: "ok", Args: `{}`})
+	e.as.Store.RecordCall(ctx, store.ToolCall{UserID: other.ID, Tool: "secret_tool", Outcome: "ok", Args: `{}`})
+
+	if code, _ := e.get(t, "/activity", false); code != http.StatusFound {
+		t.Errorf("signed out: %d", code)
+	}
+	code, body := e.get(t, "/activity", true)
+	if code != 200 || !strings.Contains(body, "jenkins_deploy") || !strings.Contains(body, "loki_query") || strings.Contains(body, "secret_tool") {
+		t.Errorf("own activity: %d", code)
+	}
+	if !strings.Contains(body, "&lt;x&gt;") {
+		t.Error("arguments are not escaped")
+	}
+	if _, body := e.get(t, "/activity?outcome=refused", true); strings.Contains(body, "loki_query") {
+		t.Error("outcome filter ignored")
+	}
+	if _, body := e.get(t, "/activity?user="+other.ID, true); strings.Contains(body, "secret_tool") {
+		t.Error("a non-admin read another user's calls")
+	}
+	if _, body := e.get(t, "/activity?tool=nothing_here", true); !strings.Contains(body, "No calls match") {
+		t.Error("filtered empty state missing")
+	}
+	e.web.AdminEmails = []string{"rahmad@example.com"}
+	if _, body := e.get(t, "/activity", true); !strings.Contains(body, "secret_tool") || !strings.Contains(body, "bob@example.com") {
+		t.Error("admin does not see everyone's calls")
+	}
+}
+
+func TestTokenRowShowsDryRunWithLimit(t *testing.T) {
+	e := newEnv(t)
+	if _, err := e.as.Store.CreatePersonalToken(context.Background(), store.PersonalToken{UserID: e.user.ID, Name: "dry", Tools: []string{"loki_query"}, Scope: []byte(`{}`), MaxWritesPerHour: 20, DryRun: true}, []byte("hd")); err != nil {
+		t.Fatal(err)
+	}
+	if _, body := e.get(t, "/tokens", true); !strings.Contains(body, "dry run · 20 writes/hour") {
+		t.Error("dry run row does not show the write limit")
 	}
 }

@@ -5,8 +5,8 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>valetkey</title>
 <style>
-:root{--bg:#f6f8f9;--card:#fff;--text:#16202a;--muted:#5b6874;--line:#e2e7eb;--accent:#12a89d;--danger:#c0392b}
-@media (prefers-color-scheme:dark){:root{--bg:#0f1417;--card:#172026;--text:#e6edf1;--muted:#93a1ad;--line:#26323a}}
+:root{--bg:#f6f8f9;--card:#fff;--text:#16202a;--muted:#5b6874;--line:#e2e7eb;--accent:#12a89d;--danger:#c0392b;--ok-bg:#e8f3ec;--ok-fg:#1d5a33;--bad-bg:#fde8e8;--bad-fg:#8a1f14;--dry-bg:#eceff2;--dry-fg:#2d3a45}
+@media (prefers-color-scheme:dark){:root{--bg:#0f1417;--card:#172026;--text:#e6edf1;--muted:#93a1ad;--line:#26323a;--ok-bg:#1d3326;--ok-fg:#a9dfbd;--bad-bg:#3a1d1a;--bad-fg:#f5b5ad;--dry-bg:#26323a;--dry-fg:#cbd5dc}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,sans-serif}
 main{max-width:860px;margin:0 auto;padding:32px 16px}
 header{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:24px}
@@ -21,6 +21,16 @@ pre{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding
 .btn.ghost{background:transparent;color:var(--danger);border:1px solid var(--line)}
 label{display:block;margin:12px 0 4px;font-weight:600}
 input{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:inherit}
+:focus-visible{outline:2px solid var(--text);outline-offset:2px}
+.filters{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin-bottom:8px}
+.filters div{flex:1 1 160px;min-width:0}.filters label{margin:0 0 4px}
+.filters input,.filters select,.filters .btn{min-height:44px}
+.filters select{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--text);font:inherit}
+.row.call{display:block;overflow-wrap:anywhere}
+.row.call summary{cursor:pointer;min-height:44px;display:flex;align-items:center}
+.outcome{padding:1px 8px;border-radius:6px;font-size:13px;font-weight:600;background:var(--dry-bg);color:var(--dry-fg)}
+.outcome.ok{background:var(--ok-bg);color:var(--ok-fg)}
+.outcome.refused,.outcome.error{background:var(--bad-bg);color:var(--bad-fg)}
 .error{background:rgba(192,57,43,.1);color:var(--danger);border-radius:10px;padding:10px 12px}
 </style>
 </head>
@@ -65,6 +75,12 @@ input{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:10p
   <h2>Personal access tokens</h2>
   <p class="muted">Static bearer tokens for headless bots that cannot do OAuth. Each one is limited to the tools and the jobs, repositories and logs you pick.</p>
   <a href="/tokens">Manage tokens</a>
+</div>
+
+<div class="card">
+  <h2>Activity</h2>
+  <p class="muted">Every tool call made with your connections, and the ones that were refused.</p>
+  <a href="/activity">See activity</a>
 </div>
 
 {{if .Catalog}}
@@ -114,7 +130,7 @@ input{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:10p
     <span><strong>{{.Name}}</strong> <span class="muted">· {{len .Tools}} tools · created {{.CreatedAt.Format "2006-01-02"}}
       · {{if .LastUsedAt}}last used {{.LastUsedAt.Format "2006-01-02 15:04"}}{{else}}never used{{end}}
       · {{if .ExpiresAt}}expires {{.ExpiresAt.Format "2006-01-02"}}{{else}}no expiry{{end}}
-      · {{if .DryRun}}dry run{{else}}{{if .MaxWritesPerHour}}{{.MaxWritesPerHour}} writes/hour{{else}}no write limit{{end}}{{end}}</span></span>
+      · {{if .DryRun}}dry run · {{end}}{{if .MaxWritesPerHour}}{{.MaxWritesPerHour}} writes/hour{{else}}no write limit{{end}}</span></span>
     <form method="post" action="/tokens/{{.ID}}/revoke"><button class="btn ghost" type="submit">Revoke</button></form>
   </div>
   {{else}}<p class="muted">No tokens yet.</p>{{end}}
@@ -159,4 +175,33 @@ input{width:100%;padding:9px 11px;border:1px solid var(--line);border-radius:10p
   <pre>{{.MCPURL}}</pre>
   <pre>Authorization: Bearer {{.Token}}</pre>
 </div>
+{{template "bottom"}}{{end}}
+
+{{define "activity"}}{{template "top"}}
+<header><h1>Activity</h1><a href="/">← Back</a></header>
+<section class="card" aria-labelledby="calls-h">
+  <h2 id="calls-h">{{if .Admin}}Everyone's tool calls{{else}}Your tool calls{{end}}</h2>
+  <form method="get" action="/activity" class="filters">
+    <div><label for="f-token">Token</label><input id="f-token" name="token" value="{{.Filter.TokenName}}" autocomplete="off"></div>
+    <div><label for="f-tool">Tool</label><input id="f-tool" name="tool" value="{{.Filter.Tool}}" autocomplete="off"></div>
+    <div><label for="f-outcome">Outcome</label><select id="f-outcome" name="outcome">
+      <option value="">Any</option>
+      {{range $o := (list "ok" "error" "refused" "dry_run")}}<option value="{{$o}}" {{if eq $o $.Filter.Outcome}}selected{{end}}>{{$o}}</option>{{end}}
+    </select></div>
+    {{if .Admin}}<div><label for="f-user">User id</label><input id="f-user" name="user" value="{{.Filter.UserID}}" autocomplete="off"></div>{{end}}
+    <button class="btn" type="submit">Filter</button>
+  </form>
+  <p class="muted">Showing the latest {{len .Calls}}, newest first.</p>
+  {{range .Calls}}
+  <div class="row call">
+    <div><code>{{.Tool}}</code> <span class="outcome {{.Outcome}}">{{.Outcome}}</span></div>
+    <div class="muted">{{.At.Format "2006-01-02 15:04:05"}} · {{if .TokenName}}token {{.TokenName}}{{else}}session{{end}}{{if $.Admin}} · {{.Email}}{{end}} · {{.MS}} ms</div>
+    {{if .Message}}<p class="error">{{.Message}}</p>{{end}}
+    <details><summary>Arguments</summary><pre>{{.Args}}</pre></details>
+  </div>
+  {{else}}
+    {{if .Filtered}}<p class="muted">No calls match these filters. <a href="/activity">Clear filters</a></p>
+    {{else}}<p class="muted">No calls yet. When an agent uses one of your tools, it shows up here.</p>{{end}}
+  {{end}}
+</section>
 {{template "bottom"}}{{end}}
