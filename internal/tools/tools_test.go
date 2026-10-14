@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -484,5 +485,39 @@ func TestDryRun(t *testing.T) {
 	text, isErr = call(t, cs, "bitbucket_write", map[string]any{"repo": "acme/other"})
 	if !isErr || !strings.HasPrefix(text, "refused: ") || deploys.Load() != 0 {
 		t.Errorf("out-of-scope write in dry run: %q isErr = %v", text, isErr)
+	}
+}
+
+func TestWriteLimitHoldsUnderParallelCalls(t *testing.T) {
+	s := store.OpenTest(t)
+	u, err := s.UpsertUser(context.Background(), "par@example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ran atomic.Int32
+	slow := Tool{Name: "fake_slow_deploy", Schema: Object(nil), Destructive: true,
+		Run: func(context.Context, Creds, json.RawMessage) (string, error) {
+			ran.Add(1)
+			time.Sleep(50 * time.Millisecond)
+			return "deployed", nil
+		}}
+	load := func(context.Context, string, string) (Creds, error) { return Creds{}, nil }
+	h := handler(fake{}, slow, load, "https://center.test", slog.New(slog.DiscardHandler), s)
+	const limit = 3
+	r := &Restriction{TokenID: "tokpar", Name: "par", Tools: []string{slow.Name}, Scope: Scope{"fake": []string{"acme/web"}}, MaxWritesPerHour: limit}
+	var wg sync.WaitGroup
+	for range limit + 5 {
+		wg.Go(func() {
+			req := &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{Name: slow.Name}, Extra: &mcp.RequestExtra{
+				TokenInfo: &mcpauth.TokenInfo{UserID: u.ID, Extra: map[string]any{RestrictionKey: r}},
+			}}
+			if _, err := h(context.Background(), req); err != nil {
+				t.Error(err)
+			}
+		})
+	}
+	wg.Wait()
+	if n := ran.Load(); n != limit {
+		t.Errorf("%d calls ran, want %d", n, limit)
 	}
 }

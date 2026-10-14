@@ -116,7 +116,7 @@ A key must belong to an upstream you have turned on, and a mistyped key is refus
 
 ### Write limit and dry run
 
-The write limit counts a token's calls to tools that change things (`bitbucket_pr_create`, `bitbucket_pr_merge`, `bitbucket_pr_comment`, `jenkins_deploy`, `jenkins_rebuild`, `argocd_sync`) over the last hour. Calls that ended in `ok`, `error` or `dry_run` count. When the limit is reached, the next write is refused until older calls fall out of the hour. Two calls that arrive at the same moment can both slip past the limit, so treat it as a guard against a runaway loop and not as an exact meter. OAuth sessions have no write limit.
+The write limit counts a token's calls to tools that change things (`bitbucket_pr_create`, `bitbucket_pr_merge`, `bitbucket_pr_comment`, `jenkins_deploy`, `jenkins_rebuild`, `argocd_sync`) over the last hour. Calls that ended in `ok`, `error` or `dry_run` count. When the limit is reached, the next write is refused until older calls fall out of the hour. One token's limited writes run one at a time, from the count until the call is recorded, so parallel calls cannot overshoot the limit. A write waits while an earlier write on the same token is still running. The limit holds within one valetkey process; running several replicas against one database would let each replica count on its own. OAuth sessions have no write limit.
 
 A dry-run token goes through the scope and limit checks, then answers `dry-run: would call <tool> with <args>` without contacting the upstream. Read tools run as usual.
 

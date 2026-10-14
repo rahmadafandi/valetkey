@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 	"unicode/utf8"
 
@@ -118,7 +119,12 @@ func handler(in Integration, t Tool, load LoadCreds, publicURL string, log *slog
 		case r != nil:
 			err = r.Scope.Check(in, t.Name, req.Params.Arguments)
 			if err == nil && t.Destructive && r.MaxWritesPerHour > 0 && audit != nil {
-				// Counted before this call is recorded, so concurrent calls can overshoot by a few.
+				// Held until the call is recorded, so parallel writes cannot all pass the same count.
+				unlock, lerr := lockWrites(ctx, r.TokenID)
+				if lerr != nil {
+					return nil, lerr
+				}
+				defer unlock()
 				n, cerr := audit.CountWrites(ctx, r.TokenID, time.Now().Add(-time.Hour))
 				switch {
 				case cerr != nil:
@@ -184,6 +190,29 @@ func handler(in Integration, t Tool, load LoadCreds, publicURL string, log *slog
 			Content: []mcp.Content{&mcp.TextContent{Text: truncate(out, MaxOutput)}},
 			IsError: err != nil,
 		}, nil
+	}
+}
+
+var (
+	writeLocksMu sync.Mutex
+	writeLocks   = map[string]chan struct{}{}
+)
+
+// lockWrites serialises one token's limited write calls, from counting to recording.
+// ponytail: in-process only, which fits one instance; several replicas need a reservation row in the database.
+func lockWrites(ctx context.Context, tokenID string) (unlock func(), err error) {
+	writeLocksMu.Lock()
+	l, ok := writeLocks[tokenID]
+	if !ok {
+		l = make(chan struct{}, 1)
+		writeLocks[tokenID] = l
+	}
+	writeLocksMu.Unlock()
+	select {
+	case l <- struct{}{}:
+		return func() { <-l }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
 }
 
