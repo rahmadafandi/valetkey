@@ -184,10 +184,10 @@ func (p *Proxy) discover(ctx context.Context, u store.Upstream) (*oauthex.AuthSe
 	return &as, nil
 }
 
-// resourceMetadataURL is the metadata's resource value: required (RFC 9728
-// section 3.3) and either the MCP URL itself or its origin, both canonical
-// server URIs in the MCP authorization spec. Scheme, host and a trailing slash
-// are compared loosely.
+// resourceMatches checks the metadata's resource value, which RFC 9728 section
+// 3.3 requires. It accepts the MCP URL itself or, deliberately, its bare origin:
+// the MCP authorization spec allows either as the canonical server URI. Scheme,
+// host and a trailing slash are compared loosely.
 func resourceMatches(resource string, endpoint *url.URL) bool {
 	r, err := url.Parse(resource)
 	if resource == "" || err != nil || !sameOrigin(r, endpoint) || r.RawQuery != "" || r.Fragment != "" {
