@@ -311,8 +311,13 @@ func TestOAuthNeedsClient(t *testing.T) {
 	e := newOAuthEnv(t, asOpts{NoRegistration: true}, true)
 	_, err := e.p.StartOAuth(ctx, e.userID, e.u, "", "", "st")
 	var need *NeedClientError
-	if !errors.Is(err, ErrNeedClient) || !errors.As(err, &need) || "http://"+need.Host != e.as.URL {
+	if !errors.Is(err, ErrNeedClient) || !errors.As(err, &need) || "http://"+need.Host != e.as.URL || "http://"+need.TokenHost != e.as.URL {
 		t.Fatalf("no client: %v", err)
+	}
+	// The secret goes to the token endpoint, which may be on another host than the issuer.
+	other := newOAuthEnv(t, asOpts{NoRegistration: true, TokenURL: "https://tokens.example/token"}, true)
+	if _, err := other.p.StartOAuth(ctx, other.userID, other.u, "", "", "st"); !errors.As(err, &need) || need.TokenHost != "tokens.example" || "http://"+need.Host != other.as.URL {
+		t.Fatalf("token endpoint elsewhere: %v %+v", err, need)
 	}
 	authURL, err := e.p.StartOAuth(ctx, e.userID, e.u, "my-client", "my-secret", "st")
 	if err != nil {

@@ -24,9 +24,10 @@ import (
 // so the user has to supply a client ID and secret.
 var ErrNeedClient = errors.New("this authorization server does not register clients itself: enter a client ID and secret")
 
-// NeedClientError is ErrNeedClient naming the authorization server, so the
-// user knows who receives the client secret.
-type NeedClientError struct{ Host string }
+// NeedClientError is ErrNeedClient naming the authorization server's host,
+// where the user creates the client, and the token endpoint's host, the only
+// place the client secret is sent.
+type NeedClientError struct{ Host, TokenHost string }
 
 func (e *NeedClientError) Error() string        { return ErrNeedClient.Error() }
 func (e *NeedClientError) Is(target error) bool { return target == ErrNeedClient }
@@ -49,11 +50,7 @@ func (p *Proxy) StartOAuth(ctx context.Context, userID string, u store.Upstream,
 	redirect := p.PublicURL + "/upstreams/" + u.ID + "/callback"
 	if clientID == "" {
 		if as.RegistrationEndpoint == "" {
-			host := as.Issuer
-			if iu, err := url.Parse(as.Issuer); err == nil && iu.Host != "" {
-				host = iu.Host
-			}
-			return "", &NeedClientError{Host: host}
+			return "", &NeedClientError{Host: hostOf(as.Issuer), TokenHost: hostOf(as.TokenEndpoint)}
 		}
 		rctx, cancel := context.WithTimeout(ctx, connectTimeout)
 		defer cancel()
@@ -119,6 +116,13 @@ func (p *Proxy) Login(ctx context.Context, userID string, u store.Upstream) (too
 		return p.refresh(ctx, userID, u, c["access_token"])
 	}
 	return c, nil
+}
+
+func hostOf(raw string) string {
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		return u.Host
+	}
+	return raw
 }
 
 // tokenAuth picks how a client authenticates at the token endpoint: "none" for

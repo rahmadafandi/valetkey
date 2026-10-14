@@ -300,7 +300,7 @@
   {{else if .NeedClient}}
     <p><strong>{{.ClientHost}}</strong> does not let valetkey register itself. Create an OAuth app there with this redirect address:</p>
     <pre>{{.Callback}}</pre>
-    <p>Then enter its client ID, and its secret if it has one. valetkey stores them encrypted and sends them only to <strong>{{.ClientHost}}</strong>.</p>
+    <p>Then enter its client ID, and its secret if it has one. valetkey stores them encrypted and sends the secret only to <strong>{{.TokenHost}}</strong>, the server's token endpoint.</p>
     <form method="post" action="/upstreams/{{.Up.ID}}/oauth">
       <label for="oc-id">Client ID</label>
       <input id="oc-id" name="client_id" autocomplete="off" required class="mono">

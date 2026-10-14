@@ -177,7 +177,7 @@ type approvedRow struct {
 }
 
 // renderUpstream shows one server: its sign-in, its approved tools and removal.
-// data may carry Error, Header, NeedClient and ClientHost.
+// data may carry Error, Header, NeedClient, ClientHost and TokenHost.
 func (h *Web) renderUpstream(w http.ResponseWriter, r *http.Request, u store.User, up store.Upstream, data map[string]any, status int) {
 	ts, err := h.Auth.Store.ApprovedTools(r.Context(), u.ID, up.ID)
 	if err != nil {
@@ -277,7 +277,7 @@ func (h *Web) startOAuth(w http.ResponseWriter, r *http.Request, u store.User, u
 	authURL, err := h.Proxy.StartOAuth(r.Context(), u.ID, up, clientID, clientSecret, state)
 	var need *proxy.NeedClientError
 	if errors.As(err, &need) {
-		h.renderUpstream(w, r, u, up, map[string]any{"NeedClient": true, "ClientHost": need.Host}, http.StatusOK)
+		h.renderUpstream(w, r, u, up, map[string]any{"NeedClient": true, "ClientHost": need.Host, "TokenHost": need.TokenHost}, http.StatusOK)
 		return
 	}
 	if err != nil {

@@ -505,7 +505,7 @@ func TestUpstreamOAuthAsksForAClient(t *testing.T) {
 		}
 		iss := "http://" + r.Host
 		json.NewEncoder(w).Encode(map[string]any{"issuer": iss, "authorization_endpoint": iss + "/authorize",
-			"token_endpoint": iss + "/token", "code_challenge_methods_supported": []string{"S256"}})
+			"token_endpoint": "https://tokens.example/token", "code_challenge_methods_supported": []string{"S256"}})
 	}))
 	t.Cleanup(as.Close)
 	f := newMCPFake(t, &mcpFake{as: as.URL, bearer: func(string) bool { return false }})
@@ -513,6 +513,9 @@ func TestUpstreamOAuthAsksForAClient(t *testing.T) {
 	host := strings.TrimPrefix(as.URL, "http://")
 	if resp.StatusCode != 200 || !strings.Contains(body, `name="client_id"`) || !strings.Contains(body, `name="client_secret"`) || !strings.Contains(body, host) {
 		t.Fatalf("client form: %d\n%s", resp.StatusCode, body)
+	}
+	if !strings.Contains(body, "sends the secret only to <strong>tokens.example</strong>") {
+		t.Errorf("client form does not name the token endpoint's host:\n%s", body)
 	}
 	id := regexp.MustCompile(`action="/upstreams/([^/"]+)/oauth"`).FindStringSubmatch(body)[1]
 	resp, _ = e.do(t, "POST", "/upstreams/"+id+"/oauth", url.Values{"client_id": {"mine"}, "client_secret": {"s3cret"}}, e.cookie)
