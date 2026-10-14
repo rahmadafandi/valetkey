@@ -24,6 +24,13 @@ import (
 // so the user has to supply a client ID and secret.
 var ErrNeedClient = errors.New("this authorization server does not register clients itself: enter a client ID and secret")
 
+// NeedClientError is ErrNeedClient naming the authorization server, so the
+// user knows who receives the client secret.
+type NeedClientError struct{ Host string }
+
+func (e *NeedClientError) Error() string        { return ErrNeedClient.Error() }
+func (e *NeedClientError) Is(target error) bool { return target == ErrNeedClient }
+
 // pendingSystem holds a sign-in in progress apart from the working login,
 // so an abandoned reconnect leaves that login in place.
 func pendingSystem(upstreamID string) string { return CredsSystem(upstreamID) + "/pending" }
@@ -42,7 +49,11 @@ func (p *Proxy) StartOAuth(ctx context.Context, userID string, u store.Upstream,
 	redirect := p.PublicURL + "/upstreams/" + u.ID + "/callback"
 	if clientID == "" {
 		if as.RegistrationEndpoint == "" {
-			return "", ErrNeedClient
+			host := as.Issuer
+			if iu, err := url.Parse(as.Issuer); err == nil && iu.Host != "" {
+				host = iu.Host
+			}
+			return "", &NeedClientError{Host: host}
 		}
 		rctx, cancel := context.WithTimeout(ctx, connectTimeout)
 		defer cancel()
@@ -92,6 +103,22 @@ func (p *Proxy) FinishOAuth(ctx context.Context, userID string, u store.Upstream
 		return err
 	}
 	return p.Creds.Delete(ctx, userID, pendingSystem(u.ID))
+}
+
+// Login loads the user's working login for the upstream, refreshing an OAuth
+// access token that is about to expire. An upstream without a login gets empty creds.
+func (p *Proxy) Login(ctx context.Context, userID string, u store.Upstream) (tools.Creds, error) {
+	if u.Auth == "none" {
+		return tools.Creds{}, nil
+	}
+	c, err := p.Creds.Load(ctx, userID, CredsSystem(u.ID))
+	if err != nil {
+		return nil, err
+	}
+	if u.Auth == "oauth" && expiring(c) {
+		return p.refresh(ctx, userID, u, c["access_token"])
+	}
+	return c, nil
 }
 
 // tokenAuth picks how a client authenticates at the token endpoint: "none" for

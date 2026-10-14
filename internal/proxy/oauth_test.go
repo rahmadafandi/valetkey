@@ -309,7 +309,9 @@ func TestOAuthRegistration(t *testing.T) {
 
 func TestOAuthNeedsClient(t *testing.T) {
 	e := newOAuthEnv(t, asOpts{NoRegistration: true}, true)
-	if _, err := e.p.StartOAuth(ctx, e.userID, e.u, "", "", "st"); !errors.Is(err, ErrNeedClient) {
+	_, err := e.p.StartOAuth(ctx, e.userID, e.u, "", "", "st")
+	var need *NeedClientError
+	if !errors.Is(err, ErrNeedClient) || !errors.As(err, &need) || "http://"+need.Host != e.as.URL {
 		t.Fatalf("no client: %v", err)
 	}
 	authURL, err := e.p.StartOAuth(ctx, e.userID, e.u, "my-client", "my-secret", "st")
@@ -616,4 +618,32 @@ func TestOAuthSSRF(t *testing.T) {
 			t.Fatal("accepted an http authorization endpoint")
 		}
 	})
+}
+
+func TestLogin(t *testing.T) {
+	e := newOAuthEnv(t, asOpts{}, true)
+	if _, err := e.p.Login(ctx, e.userID, e.u); !errors.Is(err, tools.ErrNotConnected) {
+		t.Fatalf("before sign-in: %v", err)
+	}
+	e.login(t)
+	c, err := e.p.Login(ctx, e.userID, e.u)
+	if err != nil || c["access_token"] != e.creds(t)["access_token"] || e.as.refreshCount() != 0 {
+		t.Fatalf("fresh login: %v %v", c, err)
+	}
+	stale := e.creds(t)
+	stale["expiry"] = time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	e.save(t, stale)
+	c, err = e.p.Login(ctx, e.userID, e.u)
+	if err != nil || c["access_token"] == stale["access_token"] || e.as.refreshCount() != 1 {
+		t.Fatalf("expired login: %v %v", c, err)
+	}
+	if _, _, err := e.p.Fetch(ctx, e.u, c); err != nil {
+		t.Fatalf("fetch with the refreshed login: %v", err)
+	}
+
+	none := e.u
+	none.Auth = "none"
+	if c, err := e.p.Login(ctx, e.userID, none); err != nil || len(c) != 0 {
+		t.Fatalf("none: %v %v", c, err)
+	}
 }
