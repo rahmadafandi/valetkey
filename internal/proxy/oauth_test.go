@@ -647,3 +647,55 @@ func TestLogin(t *testing.T) {
 		t.Fatalf("none: %v %v", c, err)
 	}
 }
+
+// redirector answers every request with a 307 to a sink, which counts what reaches it.
+func redirector(t *testing.T) (redirectURL string, reached func() int) {
+	t.Helper()
+	var mu sync.Mutex
+	n := 0
+	sink := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		n++
+		mu.Unlock()
+	}))
+	t.Cleanup(sink.Close)
+	redir := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, sink.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	t.Cleanup(redir.Close)
+	return redir.URL, func() int { mu.Lock(); defer mu.Unlock(); return n }
+}
+
+// A 307 or 308 makes a client resend the body, which here holds the code,
+// verifier, client secret or refresh token, so OAuth POSTs follow no redirect.
+func TestOAuthPostsFollowNoRedirect(t *testing.T) {
+	t.Run("registration", func(t *testing.T) {
+		redir, reached := redirector(t)
+		e := newOAuthEnv(t, asOpts{RegisterURL: redir + "/register"}, true)
+		if _, err := e.p.StartOAuth(ctx, e.userID, e.u, "", "", "st"); err == nil || reached() != 0 {
+			t.Fatalf("StartOAuth: %v, sink saw %d requests", err, reached())
+		}
+	})
+	t.Run("token exchange", func(t *testing.T) {
+		redir, reached := redirector(t)
+		e := newOAuthEnv(t, asOpts{TokenURL: redir + "/token"}, true)
+		authURL, err := e.p.StartOAuth(ctx, e.userID, e.u, "my-client", "my-secret", "st")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := e.p.FinishOAuth(ctx, e.userID, e.u, e.as.authorize(t, authURL)); err == nil || reached() != 0 {
+			t.Fatalf("FinishOAuth: %v, sink saw %d requests", err, reached())
+		}
+	})
+	t.Run("refresh", func(t *testing.T) {
+		redir, reached := redirector(t)
+		e := newOAuthEnv(t, asOpts{}, true)
+		e.login(t)
+		c := e.creds(t)
+		c["token_endpoint"], c["expiry"] = redir+"/token", time.Now().Add(-time.Minute).Format(time.RFC3339)
+		e.save(t, c)
+		if _, err := e.call(t); err == nil || reached() != 0 {
+			t.Fatalf("call: %v, sink saw %d requests", err, reached())
+		}
+	})
+}

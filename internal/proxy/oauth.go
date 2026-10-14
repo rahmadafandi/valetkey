@@ -63,7 +63,7 @@ func (p *Proxy) StartOAuth(ctx context.Context, userID string, u store.Upstream,
 			TokenEndpointAuthMethod: "none",
 			GrantTypes:              []string{"authorization_code", "refresh_token"},
 			ResponseTypes:           []string{"code"},
-		}, p.Guard.Client())
+		}, p.postClient())
 		if err != nil {
 			return "", fmt.Errorf("%s: %w", u.Name, err)
 		}
@@ -299,9 +299,20 @@ func oauthConfig(c tools.Creds) *oauth2.Config {
 	}
 }
 
+// postClient is the guarded client for OAuth POSTs. It follows no redirect: on
+// a 307 or 308 a client resends the body, which holds the code and verifier,
+// the client secret or the refresh token, to wherever the Location points.
+func (p *Proxy) postClient() *http.Client {
+	c := p.Guard.Client()
+	c.CheckRedirect = func(*http.Request, []*http.Request) error {
+		return errors.New("refusing to follow a redirect from an OAuth endpoint")
+	}
+	return c
+}
+
 // tokenContext makes oauth2 use the guarded client, under the connect timeout.
 func (p *Proxy) tokenContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	return context.WithTimeout(context.WithValue(ctx, oauth2.HTTPClient, p.Guard.Client()), connectTimeout)
+	return context.WithTimeout(context.WithValue(ctx, oauth2.HTTPClient, p.postClient()), connectTimeout)
 }
 
 func tokenCreds(c tools.Creds, tok *oauth2.Token) tools.Creds {
@@ -381,7 +392,7 @@ func (p *Proxy) refreshToken(ctx context.Context, c tools.Creds) (*oauth2.Token,
 		// RFC 6749 section 2.3.1: both halves are form-encoded before Basic encoding.
 		req.SetBasicAuth(url.QueryEscape(c["client_id"]), url.QueryEscape(c["client_secret"]))
 	}
-	resp, err := p.Guard.Client().Do(req)
+	resp, err := p.postClient().Do(req)
 	if err != nil {
 		return nil, err
 	}
