@@ -48,6 +48,7 @@ func (p *Proxy) StartOAuth(ctx context.Context, userID string, u store.Upstream,
 		return "", fmt.Errorf("%s: %w", u.Name, err)
 	}
 	redirect := p.PublicURL + "/upstreams/" + u.ID + "/callback"
+	registered := "" // the token_endpoint_auth_method dynamic registration settled on
 	if clientID == "" {
 		if as.RegistrationEndpoint == "" {
 			return "", &NeedClientError{Host: hostOf(as.Issuer), TokenHost: hostOf(as.TokenEndpoint)}
@@ -65,11 +66,16 @@ func (p *Proxy) StartOAuth(ctx context.Context, userID string, u store.Upstream,
 			return "", fmt.Errorf("%s: %w", u.Name, err)
 		}
 		clientID, clientSecret = reg.ClientID, reg.ClientSecret
+		registered = reg.TokenEndpointAuthMethod
+	}
+	auth := clientAuth(registered, clientSecret, as.TokenEndpointAuthMethodsSupported)
+	if auth == "none" {
+		clientSecret = "" // oauth2 would otherwise send it in the form
 	}
 	verifier := oauth2.GenerateVerifier()
 	c := tools.Creds{
 		"pending": "1", "verifier": verifier,
-		"client_id": clientID, "client_secret": clientSecret, "token_auth": tokenAuth(clientSecret, as.TokenEndpointAuthMethodsSupported),
+		"client_id": clientID, "client_secret": clientSecret, "token_auth": auth,
 		"token_endpoint": as.TokenEndpoint, "resource": u.URL, "redirect_uri": redirect,
 	}
 	if err := p.Creds.Save(ctx, userID, pendingSystem(u.ID), c); err != nil {
@@ -123,6 +129,21 @@ func hostOf(raw string) string {
 		return u.Host
 	}
 	return raw
+}
+
+// clientAuth uses the method a registration response named, when valetkey
+// supports it, and otherwise guesses with tokenAuth.
+func clientAuth(registered, secret string, supported []string) string {
+	switch {
+	case registered == "none":
+		return "none"
+	case secret == "":
+	case registered == "client_secret_basic":
+		return "basic"
+	case registered == "client_secret_post":
+		return "post"
+	}
+	return tokenAuth(secret, supported)
 }
 
 // tokenAuth picks how a client authenticates at the token endpoint: "none" for

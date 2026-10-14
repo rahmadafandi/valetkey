@@ -35,6 +35,9 @@ type asOpts struct {
 	TokenURL       string // overrides the advertised token_endpoint
 	RegisterURL    string // overrides the advertised registration_endpoint
 	AuthorizeURL   string // overrides the advertised authorization_endpoint
+	// RegAuth, when set, makes registration issue a client secret and name this
+	// token_endpoint_auth_method.
+	RegAuth string
 }
 
 // fakeAS is an authorization server issuing tokens the fake MCP server accepts.
@@ -94,6 +97,10 @@ func (as *fakeAS) serve(w http.ResponseWriter, r *http.Request) {
 		json.NewDecoder(r.Body).Decode(&as.registration)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusCreated)
+		if as.opts.RegAuth != "" {
+			fmt.Fprintf(w, `{"client_id":"dyn-client","client_secret":"dyn-secret","token_endpoint_auth_method":%q,"redirect_uris":["x"]}`, as.opts.RegAuth)
+			return
+		}
 		fmt.Fprint(w, `{"client_id":"dyn-client","redirect_uris":["x"]}`)
 	case "/token":
 		r.ParseForm()
@@ -703,4 +710,25 @@ func TestOAuthPostsFollowNoRedirect(t *testing.T) {
 			t.Fatalf("call: %v, sink saw %d requests", err, reached())
 		}
 	})
+}
+
+// The registration response's token_endpoint_auth_method wins over a guess
+// from the metadata, which here lists no methods and so suggests Basic.
+func TestOAuthRegisteredAuthMethod(t *testing.T) {
+	for _, c := range []struct{ method, wantSecret, wantAuth string }{
+		{"client_secret_post", "dyn-secret", ""},
+		{"client_secret_basic", "", "Basic " + base64.StdEncoding.EncodeToString([]byte("dyn-client:dyn-secret"))},
+		{"none", "", ""},
+	} {
+		t.Run(c.method, func(t *testing.T) {
+			e := newOAuthEnv(t, asOpts{RegAuth: c.method}, true)
+			e.login(t)
+			var form url.Values
+			var auth string
+			e.as.locked(func() { form, auth = e.as.tokenForms[0], e.as.tokenAuth[0] })
+			if form.Get("client_secret") != c.wantSecret || auth != c.wantAuth {
+				t.Fatalf("token request: secret=%q auth=%q", form.Get("client_secret"), auth)
+			}
+		})
+	}
 }
