@@ -58,7 +58,7 @@ func TestEndToEnd(t *testing.T) {
 	ts := httptest.NewUnstartedServer(nil)
 	pub := "http://" + ts.Listener.Addr().String()
 	cfg := config.Config{
-		PublicURL: pub, GoogleClientID: "gid", AllowedDomains: []string{"example.com"},
+		PublicURL: pub, OIDCIssuer: "https://idp.example.com", OIDCClientID: "cid", AllowedDomains: []string{"example.com"},
 		VaultKey: bytes.Repeat([]byte{1}, 32), SessionKey: []byte(strings.Repeat("s", 32)),
 		AccessTTL: time.Hour, RefreshTTL: time.Hour,
 		Upstreams:   map[string]config.Upstream{"jenkins": {URL: jenkins.URL}},

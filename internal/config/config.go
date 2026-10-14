@@ -7,7 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -21,18 +21,23 @@ type Upstream struct {
 }
 
 type Config struct {
-	Addr           string
-	PublicURL      string // origin only, no trailing slash
-	DatabaseURL    string
-	GoogleClientID string
-	GoogleSecret   string
-	AllowedDomains []string // lowercase
-	VaultKey       []byte   // 32 bytes
-	SessionKey     []byte
-	AccessTTL      time.Duration
-	RefreshTTL     time.Duration
-	Upstreams      map[string]Upstream // only systems whose URL is set
-	CatalogFile    string
+	Addr                 string
+	PublicURL            string // origin only, no trailing slash
+	DatabaseURL          string
+	OIDCIssuer           string
+	OIDCClientID         string
+	OIDCClientSecret     string
+	AllowedDomains       []string // lowercase
+	AllowedEmails        []string // lowercase
+	AdminEmails          []string // lowercase
+	TrustUnverifiedEmail bool
+	AuditRetention       time.Duration // 0 keeps the audit log forever
+	VaultKey             []byte        // 32 bytes
+	SessionKey           []byte
+	AccessTTL            time.Duration
+	RefreshTTL           time.Duration
+	Upstreams            map[string]Upstream // only systems whose URL is set
+	CatalogFile          string
 }
 
 func Load(getenv func(string) string) (Config, error) {
@@ -52,22 +57,22 @@ func Load(getenv func(string) string) (Config, error) {
 	}
 
 	c := Config{
-		Addr:           or("ADDR", ":8080"),
-		PublicURL:      strings.TrimRight(need("PUBLIC_URL"), "/"),
-		DatabaseURL:    or("DATABASE_URL", "sqlite://./valetkey.db"),
-		GoogleClientID: need("GOOGLE_CLIENT_ID"),
-		GoogleSecret:   need("GOOGLE_CLIENT_SECRET"),
-		CatalogFile:    or("CATALOG_FILE", "catalog.json"),
-		Upstreams:      map[string]Upstream{},
+		Addr:             or("ADDR", ":8080"),
+		PublicURL:        strings.TrimRight(need("PUBLIC_URL"), "/"),
+		DatabaseURL:      or("DATABASE_URL", "sqlite://./valetkey.db"),
+		OIDCIssuer:       need("OIDC_ISSUER"),
+		OIDCClientID:     need("OIDC_CLIENT_ID"),
+		OIDCClientSecret: need("OIDC_CLIENT_SECRET"),
+		CatalogFile:      or("CATALOG_FILE", "catalog.json"),
+		Upstreams:        map[string]Upstream{},
 	}
-	for _, d := range strings.Split(need("ALLOWED_DOMAINS"), ",") {
-		if d = strings.ToLower(strings.TrimSpace(d)); d != "" {
-			c.AllowedDomains = append(c.AllowedDomains, d)
-		}
+	c.AllowedDomains = list(getenv("ALLOWED_DOMAINS"))
+	c.AllowedEmails = list(getenv("ALLOWED_EMAILS"))
+	c.AdminEmails = list(getenv("ADMIN_EMAILS"))
+	if len(c.AllowedDomains) == 0 && len(c.AllowedEmails) == 0 {
+		missing = append(missing, "ALLOWED_DOMAINS or ALLOWED_EMAILS")
 	}
-	if len(c.AllowedDomains) == 0 && !slices.Contains(missing, "ALLOWED_DOMAINS") {
-		missing = append(missing, "ALLOWED_DOMAINS")
-	}
+	c.TrustUnverifiedEmail = getenv("OIDC_TRUST_UNVERIFIED_EMAIL") == "true"
 	vaultKey, sessionKey := need("VAULT_KEY"), need("SESSION_KEY")
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("missing required env: %s", strings.Join(missing, ", "))
@@ -96,6 +101,11 @@ func Load(getenv func(string) string) (Config, error) {
 	if c.RefreshTTL <= 0 {
 		return Config{}, errors.New("REFRESH_TOKEN_TTL must be positive")
 	}
+	days, err := strconv.Atoi(or("AUDIT_RETENTION_DAYS", "90"))
+	if err != nil || days < 0 {
+		return Config{}, errors.New("AUDIT_RETENTION_DAYS must be a whole number of days, 0 to keep forever")
+	}
+	c.AuditRetention = time.Duration(days) * 24 * time.Hour
 	for _, s := range Systems {
 		p := strings.ToUpper(s)
 		if u := strings.TrimRight(strings.TrimSpace(getenv(p+"_URL")), "/"); u != "" {
@@ -139,4 +149,15 @@ func normalizeOrigin(raw string) (string, error) {
 		return "", fmt.Errorf("remove the default port :%s", p)
 	}
 	return scheme + "://" + strings.ToLower(u.Host), nil
+}
+
+// list splits a comma-separated setting into lowercase, non-empty items.
+func list(v string) []string {
+	var out []string
+	for _, s := range strings.Split(v, ",") {
+		if s = strings.ToLower(strings.TrimSpace(s)); s != "" {
+			out = append(out, s)
+		}
+	}
+	return out
 }

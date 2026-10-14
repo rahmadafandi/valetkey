@@ -14,7 +14,6 @@ import (
 	_ "time/tzdata" // TZ works without the image shipping zoneinfo
 
 	"golang.org/x/oauth2"
-	"golang.org/x/oauth2/google"
 
 	"github.com/rahmadafandi/valetkey/internal/auth"
 	"github.com/rahmadafandi/valetkey/internal/config"
@@ -59,12 +58,16 @@ func run(log *slog.Logger) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	ep, err := auth.Discover(ctx, cfg.OIDCIssuer)
+	if err != nil {
+		return err
+	}
 	st, err := store.Open(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return err
 	}
 	defer st.Close()
-	h, err := buildHandler(cfg, st, google.Endpoint, log)
+	h, err := buildHandler(cfg, st, ep, log)
 	if err != nil {
 		return err
 	}
@@ -99,7 +102,7 @@ func cleanup(ctx context.Context, st *store.Store, log *slog.Logger) {
 	}
 }
 
-func buildHandler(cfg config.Config, st *store.Store, googleEndpoint oauth2.Endpoint, log *slog.Logger) (http.Handler, error) {
+func buildHandler(cfg config.Config, st *store.Store, idp oauth2.Endpoint, log *slog.Logger) (http.Handler, error) {
 	v, err := vault.New(cfg.VaultKey)
 	if err != nil {
 		return nil, err
@@ -117,11 +120,11 @@ func buildHandler(cfg config.Config, st *store.Store, googleEndpoint oauth2.Endp
 	as := &auth.Server{
 		Store:  st,
 		Signer: auth.NewSigner(cfg.SessionKey),
-		Google: &oauth2.Config{
-			ClientID: cfg.GoogleClientID, ClientSecret: cfg.GoogleSecret, Endpoint: googleEndpoint,
-			RedirectURL: cfg.PublicURL + "/oauth/google/callback", Scopes: []string{"openid", "email"},
-		},
-		PublicURL: cfg.PublicURL, AllowedDomains: cfg.AllowedDomains,
+		IdP: &auth.OIDC{Issuer: cfg.OIDCIssuer, AllowedDomains: cfg.AllowedDomains, AllowedEmails: cfg.AllowedEmails,
+			TrustUnverifiedEmail: cfg.TrustUnverifiedEmail,
+			Config: &oauth2.Config{ClientID: cfg.OIDCClientID, ClientSecret: cfg.OIDCClientSecret, Endpoint: idp,
+				RedirectURL: cfg.PublicURL + "/oauth/oidc/callback", Scopes: []string{"openid", "email"}}},
+		PublicURL: cfg.PublicURL,
 		AccessTTL: cfg.AccessTTL, RefreshTTL: cfg.RefreshTTL, Log: log,
 	}
 	mux := http.NewServeMux()

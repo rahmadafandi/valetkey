@@ -15,16 +15,17 @@ func env(m map[string]string) func(string) string {
 
 func valid() map[string]string {
 	return map[string]string{
-		"PUBLIC_URL":           "https://mcp.example.com/",
-		"DATABASE_URL":         "postgres://x",
-		"GOOGLE_CLIENT_ID":     "gid",
-		"GOOGLE_CLIENT_SECRET": "gsecret",
-		"ALLOWED_DOMAINS":      " Example.com, example.org ",
-		"VAULT_KEY":            base64.StdEncoding.EncodeToString(make([]byte, 32)),
-		"SESSION_KEY":          strings.Repeat("s", 32),
-		"JENKINS_URL":          "https://jenkins.example.com/",
-		"LOKI_URL":             "https://loki.example.com",
-		"LOKI_INSECURE":        "true",
+		"PUBLIC_URL":         "https://mcp.example.com/",
+		"DATABASE_URL":       "postgres://x",
+		"OIDC_ISSUER":        "https://idp.example.com",
+		"OIDC_CLIENT_ID":     "cid",
+		"OIDC_CLIENT_SECRET": "csecret",
+		"ALLOWED_DOMAINS":    " Example.com, example.org ",
+		"VAULT_KEY":          base64.StdEncoding.EncodeToString(make([]byte, 32)),
+		"SESSION_KEY":        strings.Repeat("s", 32),
+		"JENKINS_URL":        "https://jenkins.example.com/",
+		"LOKI_URL":           "https://loki.example.com",
+		"LOKI_INSECURE":      "true",
 	}
 }
 
@@ -61,13 +62,13 @@ func TestLoadValid(t *testing.T) {
 
 func TestLoadListsAllMissing(t *testing.T) {
 	m := valid()
-	delete(m, "GOOGLE_CLIENT_SECRET")
+	delete(m, "OIDC_CLIENT_SECRET")
 	m["ALLOWED_DOMAINS"] = " , "
 	_, err := Load(env(m))
 	if err == nil {
 		t.Fatal("want error")
 	}
-	for _, k := range []string{"GOOGLE_CLIENT_SECRET", "ALLOWED_DOMAINS"} {
+	for _, k := range []string{"OIDC_CLIENT_SECRET", "ALLOWED_DOMAINS or ALLOWED_EMAILS"} {
 		if !strings.Contains(err.Error(), k) {
 			t.Errorf("error %q does not name %s", err, k)
 		}
@@ -139,5 +140,37 @@ func TestLoadRejectsNonPositiveTTL(t *testing.T) {
 				t.Errorf("%s=%s: err = %v", k, v, err)
 			}
 		}
+	}
+}
+
+func TestAllowLists(t *testing.T) {
+	m := valid()
+	delete(m, "ALLOWED_DOMAINS")
+	if _, err := Load(env(m)); err == nil || !strings.Contains(err.Error(), "ALLOWED_DOMAINS or ALLOWED_EMAILS") {
+		t.Fatalf("neither list set: %v", err)
+	}
+	m["ALLOWED_EMAILS"] = "A@x.com"
+	c, err := Load(env(m))
+	if err != nil || strings.Join(c.AllowedEmails, ",") != "a@x.com" {
+		t.Fatalf("emails only: %v, %v", c.AllowedEmails, err)
+	}
+}
+
+func TestAuditRetentionAndDatabaseDefault(t *testing.T) {
+	m := valid()
+	delete(m, "DATABASE_URL")
+	c, err := Load(env(m))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.AuditRetention != 90*24*time.Hour {
+		t.Errorf("AuditRetention = %v", c.AuditRetention)
+	}
+	if c.DatabaseURL != "sqlite://./valetkey.db" {
+		t.Errorf("DatabaseURL = %q", c.DatabaseURL)
+	}
+	m["AUDIT_RETENTION_DAYS"] = "-1"
+	if _, err := Load(env(m)); err == nil {
+		t.Error("negative retention accepted")
 	}
 }

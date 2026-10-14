@@ -1,4 +1,4 @@
-// Package auth is valetkey's OAuth 2.1 authorization server, with Google as
+// Package auth is valetkey's OAuth 2.1 authorization server, with any OpenID Connect provider as
 // the identity source.
 package auth
 
@@ -13,7 +13,7 @@ import (
 )
 
 // Signer makes tamper-proof, expiring tokens for state that round-trips
-// through the browser (Google state, web session cookie), so it needs no table.
+// through the browser (identity provider state, web session cookie), so it needs no table.
 type Signer struct{ key []byte }
 
 func NewSigner(key []byte) *Signer { return &Signer{key: key} }

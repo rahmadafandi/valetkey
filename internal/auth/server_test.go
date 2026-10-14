@@ -33,16 +33,17 @@ type env struct {
 	as  *Server
 }
 
-func newEnv(t *testing.T, googleClaims map[string]any) *env {
-	g := fakeGoogle(t, googleClaims)
+func newEnv(t *testing.T, claims map[string]any) *env {
+	idp := fakeIdP(t, func(string) map[string]any { return claims }, "")
 	ts := httptest.NewUnstartedServer(nil)
 	pub := "http://" + ts.Listener.Addr().String()
 	as := &Server{
 		Store:  store.OpenTest(t),
 		Signer: NewSigner([]byte(strings.Repeat("k", 32))),
-		Google: &oauth2.Config{ClientID: "gid", ClientSecret: "gs", RedirectURL: pub + "/oauth/google/callback",
-			Endpoint: oauth2.Endpoint{AuthURL: g.URL + "/auth", TokenURL: g.URL + "/token"}, Scopes: []string{"openid", "email"}},
-		PublicURL: pub, AllowedDomains: []string{"example.com"},
+		IdP: &OIDC{Issuer: googleIssuer, AllowedDomains: []string{"example.com"},
+			Config: &oauth2.Config{ClientID: "gid", ClientSecret: "gs", RedirectURL: pub + "/oauth/oidc/callback",
+				Endpoint: oauth2.Endpoint{AuthURL: idp.URL + "/auth", TokenURL: idp.URL + "/token"}, Scopes: []string{"openid", "email"}}},
+		PublicURL: pub,
 		AccessTTL: time.Hour, RefreshTTL: 720 * time.Hour, Log: slog.New(slog.DiscardHandler),
 	}
 	mux := http.NewServeMux()
@@ -74,7 +75,7 @@ func (e *env) register(t *testing.T, redirect string) string {
 	return out["client_id"].(string)
 }
 
-// authorize walks /oauth/authorize → (Google) → callback and returns the final redirect.
+// authorize walks /oauth/authorize → (identity provider) → callback and returns the final redirect.
 func (e *env) authorize(t *testing.T, hc *http.Client, clientID, redirect string) *http.Response {
 	t.Helper()
 	q := url.Values{"response_type": {"code"}, "client_id": {clientID}, "redirect_uri": {redirect},
@@ -88,7 +89,7 @@ func (e *env) authorize(t *testing.T, hc *http.Client, clientID, redirect string
 		return resp
 	}
 	loc, _ := resp.Location()
-	resp, err = hc.Get(e.url + "/oauth/google/callback?" + url.Values{"code": {"gcode"}, "state": {loc.Query().Get("state")}}.Encode())
+	resp, err = hc.Get(e.url + "/oauth/oidc/callback?" + url.Values{"code": {"gcode"}, "state": {loc.Query().Get("state")}}.Encode())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +128,7 @@ func (e *env) consent(t *testing.T, hc *http.Client, consent, action, origin str
 	return resp
 }
 
-// consentPage walks authorize -> Google callback and returns the consent page body.
+// consentPage walks authorize -> IdP callback and returns the consent page body.
 func (e *env) consentPage(t *testing.T, hc *http.Client, clientID, redirect string) []byte {
 	t.Helper()
 	q := url.Values{"response_type": {"code"}, "client_id": {clientID}, "redirect_uri": {redirect},
@@ -138,7 +139,7 @@ func (e *env) consentPage(t *testing.T, hc *http.Client, clientID, redirect stri
 	}
 	resp.Body.Close()
 	loc, _ := resp.Location()
-	resp, err = hc.Get(e.url + "/oauth/google/callback?" + url.Values{"code": {"gcode"}, "state": {loc.Query().Get("state")}}.Encode())
+	resp, err = hc.Get(e.url + "/oauth/oidc/callback?" + url.Values{"code": {"gcode"}, "state": {loc.Query().Get("state")}}.Encode())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +270,7 @@ func TestCallbackNeedsNonceCookie(t *testing.T) {
 	resp, _ := browser().Get(e.url + "/oauth/authorize?" + q.Encode())
 	loc, _ := resp.Location()
 	// A different browser (no nonce cookie) presents the state.
-	resp, _ = browser().Get(e.url + "/oauth/google/callback?" + url.Values{"code": {"g"}, "state": {loc.Query().Get("state")}}.Encode())
+	resp, _ = browser().Get(e.url + "/oauth/oidc/callback?" + url.Values{"code": {"g"}, "state": {loc.Query().Get("state")}}.Encode())
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d", resp.StatusCode)
 	}
@@ -300,7 +301,7 @@ func TestWebLogin(t *testing.T) {
 	hc := browser()
 	resp, _ := hc.Get(e.url + "/login")
 	loc, _ := resp.Location()
-	resp, _ = hc.Get(e.url + "/oauth/google/callback?" + url.Values{"code": {"g"}, "state": {loc.Query().Get("state")}}.Encode())
+	resp, _ = hc.Get(e.url + "/oauth/oidc/callback?" + url.Values{"code": {"g"}, "state": {loc.Query().Get("state")}}.Encode())
 	if l, _ := resp.Location(); resp.StatusCode != http.StatusFound || l.Path != "/" {
 		t.Fatalf("callback: %d %v", resp.StatusCode, l)
 	}
@@ -397,4 +398,8 @@ func TestRefreshKeepsOriginalExpiry(t *testing.T) {
 	if !next.ExpiresAt.Equal(orig.ExpiresAt) {
 		t.Errorf("rotated expiry %v != original %v", next.ExpiresAt, orig.ExpiresAt)
 	}
+}
+
+func claims(email string) map[string]any {
+	return map[string]any{"iss": googleIssuer, "aud": "gid", "email": email, "email_verified": true, "hd": email[strings.LastIndex(email, "@")+1:]}
 }

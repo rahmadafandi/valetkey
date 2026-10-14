@@ -25,14 +25,13 @@ import (
 )
 
 type Server struct {
-	Store          *store.Store
-	Signer         *Signer
-	Google         *oauth2.Config
-	PublicURL      string
-	AllowedDomains []string
-	AccessTTL      time.Duration
-	RefreshTTL     time.Duration
-	Log            *slog.Logger
+	Store      *store.Store
+	Signer     *Signer
+	IdP        *OIDC
+	PublicURL  string
+	AccessTTL  time.Duration
+	RefreshTTL time.Duration
+	Log        *slog.Logger
 }
 
 const (
@@ -42,7 +41,7 @@ const (
 	codeTTL       = 10 * time.Minute
 )
 
-// pending is the sign-in request carried through Google inside the signed state.
+// pending is the sign-in request carried through the identity provider inside the signed state.
 type pending struct {
 	Kind        string `json:"k"` // "mcp" or "web"
 	Nonce       string `json:"n"` // must match the nonce cookie of the browser that started
@@ -68,10 +67,10 @@ func (s *Server) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /.well-known/oauth-authorization-server", s.metadata)
 	mux.HandleFunc("POST /oauth/register", s.register)
 	mux.HandleFunc("GET /oauth/authorize", s.authorize)
-	mux.HandleFunc("GET /oauth/google/callback", s.googleCallback)
+	mux.HandleFunc("GET /oauth/oidc/callback", s.idpCallback)
 	mux.HandleFunc("POST /oauth/consent", s.consent)
 	mux.HandleFunc("POST /oauth/token", s.token)
-	mux.HandleFunc("GET /login", func(w http.ResponseWriter, r *http.Request) { s.toGoogle(w, r, pending{Kind: "web"}) })
+	mux.HandleFunc("GET /login", func(w http.ResponseWriter, r *http.Request) { s.toIdP(w, r, pending{Kind: "web"}) })
 	mux.HandleFunc("GET /logout", func(w http.ResponseWriter, r *http.Request) {
 		http.SetCookie(w, &http.Cookie{Name: sessionCookie, Path: "/", MaxAge: -1})
 		http.Redirect(w, r, "/", http.StatusFound)
@@ -211,26 +210,30 @@ func (s *Server) authorize(w http.ResponseWriter, r *http.Request) {
 			"error_description": {"PKCE with S256 is required"}, "state": {q.Get("state")}})
 		return
 	}
-	s.toGoogle(w, r, pending{Kind: "mcp", ClientID: client.ID, RedirectURI: redirect,
+	s.toIdP(w, r, pending{Kind: "mcp", ClientID: client.ID, RedirectURI: redirect,
 		Challenge: q.Get("code_challenge"), State: q.Get("state")})
 }
 
-func (s *Server) toGoogle(w http.ResponseWriter, r *http.Request, p pending) {
+func (s *Server) toIdP(w http.ResponseWriter, r *http.Request, p pending) {
 	p.Nonce = rand.Text()
-	state, err := s.Signer.Sign("google-state", p, codeTTL)
+	state, err := s.Signer.Sign("idp-state", p, codeTTL)
 	if err != nil {
 		s.fail(w, err)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: nonceCookie, Value: p.Nonce, Path: "/oauth/google/callback",
+	http.SetCookie(w, &http.Cookie{Name: nonceCookie, Value: p.Nonce, Path: "/oauth/oidc/callback",
 		MaxAge: int(codeTTL.Seconds()), HttpOnly: true, Secure: s.secure(), SameSite: http.SameSiteLaxMode})
-	http.Redirect(w, r, s.Google.AuthCodeURL(state, oauth2.SetAuthURLParam("prompt", "select_account")), http.StatusFound)
+	var opts []oauth2.AuthCodeOption
+	if s.IdP.Issuer == googleIssuer {
+		opts = append(opts, oauth2.SetAuthURLParam("prompt", "select_account"))
+	}
+	http.Redirect(w, r, s.IdP.Config.AuthCodeURL(state, opts...), http.StatusFound)
 }
 
-func (s *Server) googleCallback(w http.ResponseWriter, r *http.Request) {
+func (s *Server) idpCallback(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()
 	var p pending
-	if err := s.Signer.Verify("google-state", q.Get("state"), &p); err != nil {
+	if err := s.Signer.Verify("idp-state", q.Get("state"), &p); err != nil {
 		http.Error(w, "Sign-in expired or invalid. Start again.", http.StatusBadRequest)
 		return
 	}
@@ -239,14 +242,14 @@ func (s *Server) googleCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Sign-in was started in another browser. Start again.", http.StatusBadRequest)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: nonceCookie, Path: "/oauth/google/callback", MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: nonceCookie, Path: "/oauth/oidc/callback", MaxAge: -1})
 	if e := q.Get("error"); e != "" {
-		http.Error(w, "Google sign-in failed: "+e, http.StatusBadRequest)
+		http.Error(w, "Sign-in failed: "+e, http.StatusBadRequest)
 		return
 	}
-	email, err := s.googleEmail(r.Context(), q.Get("code"))
+	email, err := s.IdP.Email(r.Context(), q.Get("code"))
 	if err != nil {
-		s.Log.Warn("google sign-in rejected", "err", err)
+		s.Log.Warn("sign-in rejected", "err", err)
 		http.Error(w, err.Error(), http.StatusForbidden)
 		return
 	}
