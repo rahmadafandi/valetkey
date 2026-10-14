@@ -1,0 +1,26 @@
+# valetkey with Postgres. For a quick trial, SQLite needs no compose file:
+# docker run -p 8080:8080 --env-file .env -v valetkey:/data ghcr.io/rahmadafandi/valetkey
+services:
+  valetkey:
+    image: ghcr.io/rahmadafandi/valetkey:latest
+    env_file: .env
+    environment:
+      DATABASE_URL: postgres://valetkey:valetkey@db:5432/valetkey?sslmode=disable
+    ports: ["8080:8080"]
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: valetkey
+      POSTGRES_PASSWORD: valetkey
+      POSTGRES_DB: valetkey
+    volumes: [db:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "valetkey"]
+      interval: 5s
+    restart: unless-stopped
+volumes:
+  db:
