@@ -21,6 +21,11 @@ import (
 
 const MaxBody = 1 << 20
 
+var (
+	connectTimeout = 10 * time.Second
+	dialAddr       = (&net.Dialer{}).DialContext
+)
+
 type Guard struct {
 	AllowHosts []string // exact lowercase host names that skip the address check and may use http
 	Lookup     func(ctx context.Context, host string) ([]netip.Addr, error)
@@ -30,13 +35,19 @@ var notPublic = []netip.Prefix{
 	netip.MustParsePrefix("0.0.0.0/8"),
 	netip.MustParsePrefix("100.64.0.0/10"),
 	netip.MustParsePrefix("192.0.0.0/24"),
+	netip.MustParsePrefix("192.0.2.0/24"),
+	netip.MustParsePrefix("192.88.99.0/24"),
+	netip.MustParsePrefix("198.51.100.0/24"),
+	netip.MustParsePrefix("203.0.113.0/24"),
 	netip.MustParsePrefix("198.18.0.0/15"),
 	netip.MustParsePrefix("240.0.0.0/4"),
 	netip.MustParsePrefix("100::/64"),
 	netip.MustParsePrefix("2001:db8::/32"),
+	netip.MustParsePrefix("2001:20::/28"),
 	netip.MustParsePrefix("fec0::/10"),
 	// IPv6 ranges that embed or translate to an IPv4 address, which may be private.
 	netip.MustParsePrefix("::/96"),
+	netip.MustParsePrefix("::ffff:0:0:0/96"),
 	netip.MustParsePrefix("64:ff9b::/96"),
 	netip.MustParsePrefix("64:ff9b:1::/48"),
 	netip.MustParsePrefix("2001::/32"),
@@ -46,8 +57,7 @@ var notPublic = []netip.Prefix{
 // Public reports whether a is an address on the public internet.
 func Public(a netip.Addr) bool {
 	a = a.WithZone("").Unmap() // Prefix.Contains never matches an address with a zone
-	if !a.IsValid() || a.IsUnspecified() || a.IsLoopback() || a.IsPrivate() || a.IsLinkLocalUnicast() ||
-		a.IsLinkLocalMulticast() || a.IsInterfaceLocalMulticast() || a.IsMulticast() {
+	if !a.IsGlobalUnicast() || a.IsPrivate() {
 		return false
 	}
 	for _, p := range notPublic {
@@ -103,17 +113,24 @@ func (g *Guard) dial(ctx context.Context, network, addr string) (net.Conn, error
 		return nil, fmt.Errorf("netguard: %s has no address", host)
 	}
 	if !g.allowed(host) {
+		_, literalErr := netip.ParseAddr(host)
 		for _, a := range addrs {
-			if !Public(a) {
+			switch {
+			case Public(a):
+			case literalErr == nil:
+				return nil, fmt.Errorf("netguard: %s is not a public address", host)
+			default:
 				return nil, fmt.Errorf("netguard: %s resolves to %s, which is not a public address", host, a)
 			}
 		}
 	}
-	// Dial the checked addresses themselves, so a second DNS answer cannot differ.
-	d := net.Dialer{Timeout: 10 * time.Second}
-	for _, a := range addrs {
+	// Dial the checked addresses themselves, so a second DNS answer cannot differ,
+	// under one deadline, so many unreachable answers cannot stretch it.
+	ctx, cancel := context.WithTimeout(ctx, connectTimeout)
+	defer cancel()
+	for _, a := range addrs[:min(len(addrs), 3)] {
 		var c net.Conn
-		if c, err = d.DialContext(ctx, network, net.JoinHostPort(a.Unmap().String(), port)); err == nil {
+		if c, err = dialAddr(ctx, network, net.JoinHostPort(a.Unmap().String(), port)); err == nil {
 			return c, nil
 		}
 	}

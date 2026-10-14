@@ -14,6 +14,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/rahmadafandi/valetkey/internal/version"
 )
@@ -32,6 +33,8 @@ func TestPublic(t *testing.T) {
 		"2002:7f00:1::1", "2002:a00:1::1", // 6to4 of 127.0.0.1 and 10.0.0.1
 		"2001:0:4136:e378:8000:63bf:f5ff:fffe", // Teredo, embeds an IPv4 server and client
 		"2001:db8::1",
+		"::ffff:0:a00:1", "::ffff:0:7f00:1", // SIIT IPv4-translated 10.0.0.1 and 127.0.0.1
+		"192.0.2.1", "198.51.100.1", "203.0.113.1", "192.88.99.1", "2001:20::1",
 	} {
 		if Public(netip.MustParseAddr(s)) {
 			t.Errorf("Public(%s) = true", s)
@@ -173,7 +176,7 @@ func TestDialRefusesIPLiteralsWithoutLookup(t *testing.T) {
 		"[fe80::1%25lo]", "[::1%25lo]", "[64:ff9b::7f00:1%25lo]", "[::7f00:1]",
 	} {
 		_, err := get(t, g, "https://"+host+":"+port+"/")
-		if err == nil || !strings.Contains(err.Error(), "not a public address") {
+		if err == nil || !strings.Contains(err.Error(), "not a public address") || strings.Contains(err.Error(), "resolves to") {
 			t.Errorf("%s: err = %v", host, err)
 		}
 	}
@@ -399,5 +402,35 @@ func TestIgnoresProxyEnvironment(t *testing.T) {
 	}
 	if n := proxied.Load(); n != 0 {
 		t.Fatalf("proxy received %d requests", n)
+	}
+}
+
+// Many unreachable answers must not hold a request open for one timeout each.
+func TestDialHasOneDeadline(t *testing.T) {
+	oldTimeout, oldDial := connectTimeout, dialAddr
+	t.Cleanup(func() { connectTimeout, dialAddr = oldTimeout, oldDial })
+	connectTimeout = 200 * time.Millisecond
+	var mu sync.Mutex
+	var tried []string
+	dialAddr = func(ctx context.Context, network, addr string) (net.Conn, error) {
+		mu.Lock()
+		tried = append(tried, addr)
+		mu.Unlock()
+		<-ctx.Done() // a blackholed address: the SYN is never answered
+		return nil, ctx.Err()
+	}
+	var l lookups
+	g := &Guard{Lookup: l.answer("93.184.216.34", "93.184.216.35", "93.184.216.36", "93.184.216.37", "93.184.216.38")}
+	start := time.Now()
+	if _, err := get(t, g, "https://blackhole.example/"); err == nil {
+		t.Fatal("request succeeded")
+	}
+	if d := time.Since(start); d > 2*connectTimeout {
+		t.Fatalf("dial took %v with a %v connect timeout", d, connectTimeout)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(tried) == 0 || len(tried) > 3 {
+		t.Fatalf("tried %d addresses: %v", len(tried), tried)
 	}
 }
