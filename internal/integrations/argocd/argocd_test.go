@@ -34,6 +34,7 @@ type fakeArgo struct {
 	mu       sync.Mutex
 	statuses []string // returned in order; the last one repeats
 	synced   bool
+	syncs    int
 }
 
 func newFake(t *testing.T, statuses ...string) *fakeArgo {
@@ -59,6 +60,7 @@ func newFake(t *testing.T, statuses ...string) *fakeArgo {
 	mux.HandleFunc("POST /api/v1/applications/web/sync", authed(func(w http.ResponseWriter, _ *http.Request) {
 		f.mu.Lock()
 		f.synced = true
+		f.syncs++
 		f.mu.Unlock()
 		w.Write([]byte(`{}`))
 	}))
@@ -256,5 +258,40 @@ func TestSyncSucceedsEvenIfStatusReadFails(t *testing.T) {
 	out, err := run(t, a, "argocd_sync", tok, `{"app":"web"}`)
 	if err != nil || !strings.HasPrefix(out, "sync triggered (status unavailable: ") || !f.synced {
 		t.Errorf("out=%q err=%v synced=%v", out, err, f.synced)
+	}
+}
+
+func TestSyncExpectedRevision(t *testing.T) {
+	const full = "0123456789abcdef0123456789abcdef01234567"
+	cases := []struct {
+		name, args, wantErr string
+		refused             bool
+		syncs               int
+	}{
+		{"match", `{"app":"web","expected_revision":"0123456"}`, "", false, 1},
+		{"mismatch", `{"app":"web","expected_revision":"fffffff"}`, "0123456789", true, 0},
+		{"too short", `{"app":"web","expected_revision":"0123"}`, "expected_revision needs at least 7 characters", false, 0},
+		{"omitted", `{"app":"web"}`, "", false, 1},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a, f := setup(t, appJSON("Synced", "Healthy", full, "img:v2"))
+			out, err := run(t, a, "argocd_sync", tok, tc.args)
+			if f.syncs != tc.syncs {
+				t.Errorf("sync POSTs = %d, want %d", f.syncs, tc.syncs)
+			}
+			if tc.wantErr == "" {
+				if err != nil || !strings.Contains(out, "sync triggered") {
+					t.Errorf("out=%q err=%v", out, err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) || tools.IsRefusal(err) != tc.refused {
+				t.Errorf("err=%v refused=%v", err, tools.IsRefusal(err))
+			}
+			if tc.refused && !strings.HasPrefix(err.Error(), "refused: argocd_sync: ") {
+				t.Errorf("err=%v", err)
+			}
+		})
 	}
 }

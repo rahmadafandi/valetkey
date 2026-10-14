@@ -282,3 +282,12 @@ func TestBuildWaitTimesOut(t *testing.T) {
 		t.Fatalf("got %q %v", out, err)
 	}
 }
+
+func TestRebuildReturnsBuildNumber(t *testing.T) {
+	j, f := setup(t)
+	f.queueLocation = true
+	out, err := run(t, j, "jenkins_rebuild", alice, `{"jobURL":"`+f.URL+`/job/app","number":7}`)
+	if err != nil || !strings.Contains(out, "build started: #9") {
+		t.Errorf("out=%q err=%v", out, err)
+	}
+}

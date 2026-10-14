@@ -177,8 +177,8 @@ func (a *ArgoCD) do(ctx context.Context, tok, method, path, body string) ([]byte
 }
 
 type appStatus struct {
-	Sync, Health, Revision, Message, Resources, FinishedAt string
-	Images                                                 []string
+	Sync, Health, Revision, FullRevision, Message, Resources, FinishedAt string
+	Images                                                               []string
 }
 
 func (s appStatus) String() string {
@@ -235,6 +235,7 @@ func parseApp(body []byte) (appStatus, error) {
 		return appStatus{}, fmt.Errorf("argocd: parse app: %w", err)
 	}
 	rev := a.Status.Sync.Revision
+	full := rev
 	if len(rev) > 10 {
 		rev = rev[:10]
 	}
@@ -256,7 +257,7 @@ func parseApp(body []byte) (appStatus, error) {
 		res = fmt.Sprintf("%d/%d synced · %d healthy", synced, total, healthy)
 	}
 	return appStatus{
-		Sync: a.Status.Sync.Status, Health: a.Status.Health.Status, Revision: rev,
+		Sync: a.Status.Sync.Status, Health: a.Status.Health.Status, Revision: rev, FullRevision: full,
 		Message: strings.TrimSpace(msg), Resources: res, FinishedAt: a.Status.OperationState.FinishedAt,
 		Images: a.Status.Summary.Images,
 	}, nil
@@ -337,9 +338,10 @@ func watchMinutes(m int) int {
 func (a *ArgoCD) Tools() []tools.Tool {
 	app := tools.Str("ArgoCD application name")
 	type args struct {
-		App            string `json:"app"`
-		Refresh        string `json:"refresh"`
-		TimeoutMinutes int    `json:"timeoutMinutes"`
+		App              string `json:"app"`
+		Refresh          string `json:"refresh"`
+		TimeoutMinutes   int    `json:"timeoutMinutes"`
+		ExpectedRevision string `json:"expected_revision"`
 	}
 	prep := func(ctx context.Context, c tools.Creds, raw json.RawMessage) (args, string, error) {
 		var x args
@@ -369,7 +371,10 @@ func (a *ArgoCD) Tools() []tools.Tool {
 		{
 			Name:        "argocd_sync",
 			Description: "Trigger an ArgoCD sync for an application. MUTATING: applies the desired git state to the cluster (deploys), so get the human's explicit go-ahead first. Returns the fresh status after starting.",
-			Schema:      tools.Object(map[string]any{"app": app}, "app"),
+			Schema: tools.Object(map[string]any{
+				"app":               app,
+				"expected_revision": tools.Str("optional git commit (7+ characters) you expect Argo CD to deploy; the sync is refused if the app resolves to another commit"),
+			}, "app"),
 			Destructive: true,
 			Run: func(ctx context.Context, c tools.Creds, raw json.RawMessage) (string, error) {
 				x, tok, err := prep(ctx, c, raw)
@@ -378,6 +383,19 @@ func (a *ArgoCD) Tools() []tools.Tool {
 				}
 				if strings.TrimSpace(x.App) == "" {
 					return "", errors.New("app is required")
+				}
+				if x.ExpectedRevision != "" {
+					want := strings.ToLower(strings.TrimSpace(x.ExpectedRevision))
+					if len(want) < 7 {
+						return "", errors.New("expected_revision needs at least 7 characters")
+					}
+					s, err := a.app(ctx, tok, x.App, "normal")
+					if err != nil {
+						return "", err
+					}
+					if !strings.HasPrefix(strings.ToLower(s.FullRevision), want) {
+						return "", tools.Refuse("argocd_sync: app %s resolves to revision %s, not %s; check the app's target before syncing", x.App, s.Revision, want)
+					}
 				}
 				if _, err := a.do(ctx, tok, http.MethodPost, "/api/v1/applications/"+url.PathEscape(x.App)+"/sync", "{}"); err != nil {
 					return "", err
