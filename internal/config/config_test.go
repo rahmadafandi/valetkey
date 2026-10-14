@@ -190,3 +190,16 @@ func TestLoadOIDCIssuerNeedsHTTPS(t *testing.T) {
 		}
 	}
 }
+
+func TestUpstreamAllowHosts(t *testing.T) {
+	m := valid()
+	c, err := Load(env(m))
+	if err != nil || len(c.UpstreamAllowHosts) != 0 {
+		t.Fatalf("unset: %v, %v", c.UpstreamAllowHosts, err)
+	}
+	m["UPSTREAM_ALLOW_HOSTS"] = " Mcp.Internal.Example.com, 127.0.0.1 "
+	c, err = Load(env(m))
+	if err != nil || strings.Join(c.UpstreamAllowHosts, ",") != "mcp.internal.example.com,127.0.0.1" {
+		t.Fatalf("set: %v, %v", c.UpstreamAllowHosts, err)
+	}
+}

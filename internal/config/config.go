@@ -38,6 +38,7 @@ type Config struct {
 	RefreshTTL           time.Duration
 	Upstreams            map[string]Upstream // only systems whose URL is set
 	CatalogFile          string
+	UpstreamAllowHosts   []string // lowercase; user MCP servers on these hosts skip the public-address check
 }
 
 func Load(getenv func(string) string) (Config, error) {
@@ -69,6 +70,7 @@ func Load(getenv func(string) string) (Config, error) {
 	c.AllowedDomains = list(getenv("ALLOWED_DOMAINS"))
 	c.AllowedEmails = list(getenv("ALLOWED_EMAILS"))
 	c.AdminEmails = list(getenv("ADMIN_EMAILS"))
+	c.UpstreamAllowHosts = list(getenv("UPSTREAM_ALLOW_HOSTS"))
 	if len(c.AllowedDomains) == 0 && len(c.AllowedEmails) == 0 {
 		missing = append(missing, "ALLOWED_DOMAINS or ALLOWED_EMAILS")
 	}
