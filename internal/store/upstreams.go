@@ -104,7 +104,7 @@ func (s *Store) DeleteUpstream(ctx context.Context, userID, id string) error {
 		if _, err := tx.NewDelete().Model((*UpstreamTool)(nil)).Where("upstream_id = ?", id).Exec(ctx); err != nil {
 			return err
 		}
-		if _, err := tx.NewDelete().Model((*credential)(nil)).Where("user_id = ? AND system = ?", userID, "upstream:"+id).Exec(ctx); err != nil {
+		if _, err := tx.NewDelete().Model((*credential)(nil)).Where("user_id = ? AND system IN (?, ?)", userID, "upstream:"+id, "upstream:"+id+"/pending").Exec(ctx); err != nil {
 			return err
 		}
 		return notFound(deleteOne(tx.NewDelete().Model((*Upstream)(nil)).Where("id = ? AND user_id = ?", id, userID).Exec(ctx)))

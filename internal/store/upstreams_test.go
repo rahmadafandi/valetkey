@@ -145,8 +145,10 @@ func TestDeleteUpstream(t *testing.T) {
 	u1, u2, ub := mkUpstream(t, s, a.ID, "github"), mkUpstream(t, s, a.ID, "other"), mkUpstream(t, s, b.ID, "github")
 	for _, x := range []struct{ u, id string }{{a.ID, u1.ID}, {a.ID, u2.ID}, {b.ID, ub.ID}} {
 		s.ApproveTools(ctx, x.u, x.id, []UpstreamTool{{Name: "t", InputSchema: "{}"}})
-		if err := s.PutCredential(ctx, x.u, "upstream:"+x.id, []byte("sealed")); err != nil {
-			t.Fatal(err)
+		for _, sys := range []string{"upstream:" + x.id, "upstream:" + x.id + "/pending"} {
+			if err := s.PutCredential(ctx, x.u, sys, []byte("sealed")); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 	if err := s.DeleteUpstream(ctx, a.ID, ub.ID); !errors.Is(err, ErrNotFound) {
@@ -161,13 +163,15 @@ func TestDeleteUpstream(t *testing.T) {
 	if _, err := s.GetUpstream(ctx, a.ID, u1.ID); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("got %v", err)
 	}
-	if _, err := s.GetCredential(ctx, a.ID, "upstream:"+u1.ID); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("credential left: %v", err)
+	for _, sys := range []string{"upstream:" + u1.ID, "upstream:" + u1.ID + "/pending"} {
+		if _, err := s.GetCredential(ctx, a.ID, sys); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("%s left: %v", sys, err)
+		}
 	}
 	if ts, _ := s.UserTools(ctx, a.ID); len(ts) != 1 || ts[0].Upstream.ID != u2.ID {
 		t.Fatalf("a tools: %+v", ts)
 	}
-	if _, err := s.GetCredential(ctx, a.ID, "upstream:"+u2.ID); err != nil {
+	if _, err := s.GetCredential(ctx, a.ID, "upstream:"+u2.ID+"/pending"); err != nil {
 		t.Fatal(err)
 	}
 	if ts, _ := s.UserTools(ctx, b.ID); len(ts) != 1 {
