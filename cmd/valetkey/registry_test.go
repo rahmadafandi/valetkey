@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -37,6 +38,11 @@ func TestIntegrationsAreScoped(t *testing.T) {
 		for _, tl := range in.Tools() {
 			if tl.Unscoped {
 				t.Errorf("%s: native tool is Unscoped, so a token's scope would not fence it", tl.Name)
+			}
+			// "__" is reserved for proxied tools: the SDK keeps the last tool added
+			// under a name, so a user's MCP server could shadow this one.
+			if strings.Contains(tl.Name, "__") {
+				t.Errorf("%s: native tool name contains \"__\", which is reserved for proxied tools", tl.Name)
 			}
 		}
 	}
