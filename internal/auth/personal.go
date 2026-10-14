@@ -64,6 +64,6 @@ func (s *Server) verifyPersonal(ctx context.Context, token string) (*mcpauth.Tok
 	}
 	return &mcpauth.TokenInfo{UserID: u.ID, Expiration: exp, Extra: map[string]any{
 		"email":              u.Email,
-		tools.RestrictionKey: &tools.Restriction{Name: p.Name, Tools: p.Tools, Scope: scope},
+		tools.RestrictionKey: &tools.Restriction{TokenID: p.ID, Name: p.Name, Tools: p.Tools, Scope: scope},
 	}}, nil
 }

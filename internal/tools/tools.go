@@ -14,6 +14,7 @@ import (
 	mcpauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/rahmadafandi/valetkey/internal/store"
 	"github.com/rahmadafandi/valetkey/internal/upstream"
 )
 
@@ -58,6 +59,12 @@ const (
 	MaxOutput      = 100 * 1024
 )
 
+// Audit stores every tool call and answers write-budget questions.
+type Audit interface {
+	RecordCall(ctx context.Context, c store.ToolCall) error
+	CountWrites(ctx context.Context, tokenID string, since time.Time) (int, error)
+}
+
 // RestrictionKey is the TokenInfo.Extra key carrying a personal access token's *Restriction.
 const RestrictionKey = "restriction"
 
@@ -71,12 +78,12 @@ func RestrictionOf(ti *mcpauth.TokenInfo) *Restriction {
 }
 
 // NewServer registers every integration's tools, or only those r allows when r is not nil.
-func NewServer(ints []Integration, load LoadCreds, publicURL string, log *slog.Logger, r *Restriction) *mcp.Server {
+func NewServer(ints []Integration, load LoadCreds, publicURL string, log *slog.Logger, audit Audit, r *Restriction) *mcp.Server {
 	srv := mcp.NewServer(&mcp.Implementation{Name: "valetkey", Version: "0.1.0"}, nil)
 	for _, in := range ints {
 		for _, t := range in.Tools() {
 			if r == nil || r.Allows(t.Name) {
-				srv.AddTool(toolDef(t), handler(in, t, load, publicURL, log))
+				srv.AddTool(toolDef(t), handler(in, t, load, publicURL, log, audit))
 			}
 		}
 	}
@@ -91,7 +98,7 @@ func toolDef(t Tool) *mcp.Tool {
 	}
 }
 
-func handler(in Integration, t Tool, load LoadCreds, publicURL string, log *slog.Logger) mcp.ToolHandler {
+func handler(in Integration, t Tool, load LoadCreds, publicURL string, log *slog.Logger, audit Audit) mcp.ToolHandler {
 	return func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 		start := time.Now()
 		var userID, email string
@@ -127,6 +134,27 @@ func handler(in Integration, t Tool, load LoadCreds, publicURL string, log *slog
 		}
 		log.Info("tool call", "user", email, "via", via, "tool", t.Name, "args", truncate(string(req.Params.Arguments), 1024),
 			"ok", err == nil, "ms", time.Since(start).Milliseconds())
+		if audit != nil && userID != "" {
+			outcome := "ok"
+			switch {
+			case IsRefusal(err):
+				outcome = "refused"
+			case err != nil:
+				outcome = "error"
+			}
+			c := store.ToolCall{UserID: userID, Tool: t.Name, IsWrite: t.Destructive, Outcome: outcome,
+				Args: truncate(string(req.Params.Arguments), 4096), MS: time.Since(start).Milliseconds()}
+			if err != nil {
+				c.Message = truncate(err.Error(), 1024)
+			}
+			if r != nil {
+				c.TokenID, c.TokenName = r.TokenID, r.Name
+			}
+			// A cancelled request must not drop the record of a call that already ran.
+			if aerr := audit.RecordCall(context.WithoutCancel(ctx), c); aerr != nil {
+				log.Error("audit record failed", "tool", t.Name, "err", aerr)
+			}
+		}
 		return &mcp.CallToolResult{
 			Content: []mcp.Content{&mcp.TextContent{Text: truncate(out, MaxOutput)}},
 			IsError: err != nil,
@@ -183,12 +211,12 @@ func truncate(s string, max int) string {
 // Unauthenticated requests get 401 with WWW-Authenticate pointing at resourceMetadataURL.
 // A personal access token gets a server holding only its allowed tools, so
 // tools/list shows just those.
-func HTTPHandler(ints []Integration, load LoadCreds, publicURL string, log *slog.Logger, verify mcpauth.TokenVerifier, resourceMetadataURL string) http.Handler {
-	full := NewServer(ints, load, publicURL, log, nil)
+func HTTPHandler(ints []Integration, load LoadCreds, publicURL string, log *slog.Logger, audit Audit, verify mcpauth.TokenVerifier, resourceMetadataURL string) http.Handler {
+	full := NewServer(ints, load, publicURL, log, audit, nil)
 	h := mcp.NewStreamableHTTPHandler(func(req *http.Request) *mcp.Server {
 		// ponytail: a restricted server is rebuilt per request; cache by token if this shows up in profiles.
 		if r := RestrictionOf(mcpauth.TokenInfoFromContext(req.Context())); r != nil {
-			return NewServer(ints, load, publicURL, log, r)
+			return NewServer(ints, load, publicURL, log, audit, r)
 		}
 		return full
 	},

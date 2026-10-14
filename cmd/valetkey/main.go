@@ -71,7 +71,7 @@ func run(log *slog.Logger) error {
 	if err != nil {
 		return err
 	}
-	go cleanup(ctx, st, log)
+	go cleanup(ctx, st, cfg.AuditRetention, log)
 
 	srv := &http.Server{Addr: cfg.Addr, Handler: h, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
@@ -87,7 +87,7 @@ func run(log *slog.Logger) error {
 	return nil
 }
 
-func cleanup(ctx context.Context, st *store.Store, log *slog.Logger) {
+func cleanup(ctx context.Context, st *store.Store, retention time.Duration, log *slog.Logger) {
 	t := time.NewTicker(10 * time.Minute)
 	defer t.Stop()
 	for {
@@ -95,7 +95,11 @@ func cleanup(ctx context.Context, st *store.Store, log *slog.Logger) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := st.DeleteExpired(ctx, time.Time{}); err != nil {
+			var before time.Time
+			if retention > 0 {
+				before = time.Now().Add(-retention)
+			}
+			if err := st.DeleteExpired(ctx, before); err != nil {
 				log.Warn("cleanup failed", "err", err)
 			}
 		}
@@ -130,7 +134,7 @@ func buildHandler(cfg config.Config, st *store.Store, idp oauth2.Endpoint, log *
 	}
 	mux := http.NewServeMux()
 	as.Routes(mux)
-	mux.Handle("/mcp", tools.HTTPHandler(ints, cr.Load, cfg.PublicURL, log, as.Verify, as.ResourceMetadataURL()))
+	mux.Handle("/mcp", tools.HTTPHandler(ints, cr.Load, cfg.PublicURL, log, st, as.Verify, as.ResourceMetadataURL()))
 	(&web.Web{Auth: as, Creds: cr, Integrations: ints, Catalog: catalog, PublicURL: cfg.PublicURL, Log: log}).Routes(mux)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 	return mux, nil

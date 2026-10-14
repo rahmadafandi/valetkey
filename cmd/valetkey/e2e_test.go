@@ -183,6 +183,19 @@ func TestEndToEnd(t *testing.T) {
 		t.Fatal("token called a tool it was not given")
 	}
 
+	calls, err := st.ListCalls(ctx, store.CallFilter{UserID: u.ID, Limit: 50})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var refused, ok bool
+	for _, c := range calls {
+		refused = refused || (c.TokenName == "atlas" && c.Outcome == "refused")
+		ok = ok || (c.TokenName == "atlas" && c.Outcome == "ok" && c.Tool == "jenkins_builds")
+	}
+	if !refused || !ok {
+		t.Errorf("audit log misses token calls: %+v", calls)
+	}
+
 	// 8. Health check.
 	resp, _ = http.Get(pub + "/healthz")
 	resp.Body.Close()

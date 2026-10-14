@@ -12,9 +12,10 @@ import (
 // Restriction limits what a personal access token may do: which tools it sees
 // and, through Scope, what those tools may reach.
 type Restriction struct {
-	Name  string // the token's name, for logs
-	Tools []string
-	Scope Scope
+	TokenID string // the token's id, for the audit log
+	Name    string // the token's name, for logs
+	Tools   []string
+	Scope   Scope
 }
 
 // Allows reports whether the token may see and call tool at all.

@@ -15,6 +15,7 @@ import (
 	mcpauth "github.com/modelcontextprotocol/go-sdk/auth"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/rahmadafandi/valetkey/internal/store"
 	"github.com/rahmadafandi/valetkey/internal/upstream"
 )
 
@@ -75,7 +76,9 @@ func (fake) Tools() []Tool {
 
 const metaURL = "https://center.test/.well-known/oauth-protected-resource"
 
-func serve(t *testing.T) string {
+func serve(t *testing.T) string { return serveAudit(t, nil) }
+
+func serveAudit(t *testing.T, audit Audit) string {
 	load := func(_ context.Context, userID, system string) (Creds, error) {
 		if userID == "u3" {
 			return nil, errors.New("pq: connection refused to 10.0.0.5")
@@ -99,7 +102,7 @@ func serve(t *testing.T) string {
 		}
 		return nil, mcpauth.ErrInvalidToken
 	}
-	ts := httptest.NewServer(HTTPHandler([]Integration{fake{}}, load, "https://center.test", slog.New(slog.DiscardHandler), verify, metaURL))
+	ts := httptest.NewServer(HTTPHandler([]Integration{fake{}}, load, "https://center.test", slog.New(slog.DiscardHandler), audit, verify, metaURL))
 	t.Cleanup(ts.Close)
 	return ts.URL
 }
@@ -281,7 +284,7 @@ func TestOAuthTokenSeesAllTools(t *testing.T) {
 
 func TestHandlerRefusesToolOutsideTokenList(t *testing.T) {
 	deploy := fake{}.Tools()[2]
-	h := handler(fake{}, deploy, nil, "https://center.test", slog.New(slog.DiscardHandler))
+	h := handler(fake{}, deploy, nil, "https://center.test", slog.New(slog.DiscardHandler), nil)
 	req := &mcp.CallToolRequest{Params: &mcp.CallToolParamsRaw{Name: deploy.Name}, Extra: &mcp.RequestExtra{
 		TokenInfo: &mcpauth.TokenInfo{UserID: "u1", Extra: map[string]any{RestrictionKey: &Restriction{Name: "atlas", Tools: []string{"fake_echo"}}}},
 	}}
@@ -291,5 +294,84 @@ func TestHandlerRefusesToolOutsideTokenList(t *testing.T) {
 	}
 	if text := res.Content[0].(*mcp.TextContent).Text; text != "refused: fake_deploy: not allowed for this token" {
 		t.Errorf("text = %q", text)
+	}
+}
+
+type fakeAudit struct {
+	calls  []store.ToolCall
+	writes int
+	fail   bool
+}
+
+func (f *fakeAudit) RecordCall(_ context.Context, c store.ToolCall) error {
+	if f.fail {
+		return errors.New("db down")
+	}
+	f.calls = append(f.calls, c)
+	return nil
+}
+
+func (f *fakeAudit) CountWrites(context.Context, string, time.Time) (int, error) {
+	return f.writes, nil
+}
+
+func TestAuditRecordsOAuthCall(t *testing.T) {
+	a := &fakeAudit{}
+	cs := connect(t, serveAudit(t, a), "t1")
+	call(t, cs, "fake_deploy", nil)
+	call(t, cs, "fake_echo", map[string]any{"msg": "hi"})
+	if len(a.calls) != 2 {
+		t.Fatalf("calls = %+v", a.calls)
+	}
+	d, e := a.calls[0], a.calls[1]
+	if d.Outcome != "ok" || d.TokenID != "" || d.Tool != "fake_deploy" || !d.IsWrite || d.UserID != "u1" || d.MS < 0 {
+		t.Errorf("deploy row = %+v", d)
+	}
+	if e.IsWrite || e.Args != `{"msg":"hi"}` {
+		t.Errorf("echo row = %+v", e)
+	}
+}
+
+func TestAuditRecordsRefusal(t *testing.T) {
+	a := &fakeAudit{}
+	cs := connect(t, serveAudit(t, a), "pat")
+	if _, isErr := call(t, cs, "bitbucket_fake", map[string]any{"repo": "acme/other"}); !isErr {
+		t.Fatal("expected refusal")
+	}
+	if len(a.calls) != 1 {
+		t.Fatalf("calls = %+v", a.calls)
+	}
+	c := a.calls[0]
+	if c.Outcome != "refused" || !strings.HasPrefix(c.Message, "refused: ") || c.TokenName != "atlas" {
+		t.Errorf("row = %+v", c)
+	}
+}
+
+func TestAuditRecordsUpstreamError(t *testing.T) {
+	a := &fakeAudit{}
+	cs := connect(t, serveAudit(t, a), "t1")
+	call(t, cs, "fake_unauth", nil)
+	if len(a.calls) != 1 || a.calls[0].Outcome != "error" || a.calls[0].Message == "" {
+		t.Errorf("calls = %+v", a.calls)
+	}
+}
+
+func TestAuditFailureDoesNotFailCall(t *testing.T) {
+	cs := connect(t, serveAudit(t, &fakeAudit{fail: true}), "t1")
+	if text, isErr := call(t, cs, "fake_echo", map[string]any{"msg": "hi"}); isErr || text != "secret1:hi" {
+		t.Errorf("%q isErr=%v", text, isErr)
+	}
+}
+
+func TestAuditTruncatesArgsAndMessage(t *testing.T) {
+	a := &fakeAudit{}
+	cs := connect(t, serveAudit(t, a), "pat")
+	call(t, cs, "bitbucket_fake", map[string]any{"repo": strings.Repeat("r", 6000)})
+	c := a.calls[0]
+	if len(c.Args) > 4096+60 || !strings.Contains(c.Args, "[truncated") {
+		t.Errorf("args len %d", len(c.Args))
+	}
+	if len(c.Message) > 1024+60 || !strings.Contains(c.Message, "[truncated") {
+		t.Errorf("message len %d", len(c.Message))
 	}
 }
