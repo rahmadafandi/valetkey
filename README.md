@@ -112,7 +112,7 @@ A whole scope for a token that deploys one service looks like this:
 }
 ```
 
-A key must belong to an upstream you have turned on, and a mistyped key is refused when you create the token.
+A key must belong to an upstream you have turned on, and a mistyped key is refused when you create the token. If you later turn that upstream off, the token stops working: `/mcp` answers 401 and the server log names the token id.
 
 ### Write limit and dry run
 

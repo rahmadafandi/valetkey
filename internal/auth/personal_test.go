@@ -1,8 +1,10 @@
 package auth
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -71,6 +73,37 @@ func TestCreatePersonalTokenValidates(t *testing.T) {
 	} {
 		if _, err := e.as.CreatePersonalToken(ctx, u.ID, NewToken{Name: c.name, Tools: c.tools, Scope: []byte(c.scope)}); err == nil {
 			t.Errorf("%s: accepted", name)
+		}
+	}
+}
+
+func TestPersonalTokenForDisabledIntegrationIsInvalid(t *testing.T) {
+	e := newEnv(t, nil)
+	var logs bytes.Buffer
+	e.as.Log = slog.New(slog.NewTextHandler(&logs, nil))
+	ctx := context.Background()
+	u, _ := e.as.Store.UpsertUser(ctx, "rahmad@example.com")
+	tok, err := e.as.CreatePersonalToken(ctx, u.ID, NewToken{Name: "atlas", Tools: []string{"bitbucket_pr_get"}, Scope: []byte(`{"bitbucket":"acme/web"}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	list, _ := e.as.Store.ListPersonalTokens(ctx, u.ID)
+	e.as.Integrations = e.as.Integrations[:1] // bitbucket turned off
+	if _, err := e.as.Verify(ctx, tok, nil); !errors.Is(err, mcpauth.ErrInvalidToken) {
+		t.Errorf("err = %v, want ErrInvalidToken", err)
+	}
+	if !strings.Contains(logs.String(), list[0].ID) || !strings.Contains(logs.String(), "bitbucket") {
+		t.Errorf("log does not name the token and reason: %s", logs.String())
+	}
+}
+
+func TestVerifyHidesStoreErrors(t *testing.T) {
+	e := newEnv(t, nil)
+	e.as.Store.Close()
+	for _, tok := range []string{"oauth-token", PersonalTokenPrefix + "x"} {
+		_, err := e.as.Verify(context.Background(), tok, nil)
+		if err == nil || errors.Is(err, mcpauth.ErrInvalidToken) || strings.Contains(err.Error(), "sql") || strings.Contains(err.Error(), "closed") {
+			t.Errorf("%s: err = %v", tok, err)
 		}
 	}
 }

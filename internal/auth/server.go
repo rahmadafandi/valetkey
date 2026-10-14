@@ -86,6 +86,10 @@ func (s *Server) ResourceMetadataURL() string {
 	return s.PublicURL + "/.well-known/oauth-protected-resource"
 }
 
+// errVerify is what a caller sees when a token cannot be checked; the SDK
+// sends a verifier's error text in the 500 response, so details stay in the log.
+var errVerify = errors.New("could not check the token (internal error)")
+
 // Verify is the bearer-token check for /mcp.
 func (s *Server) Verify(ctx context.Context, token string, _ *http.Request) (*mcpauth.TokenInfo, error) {
 	if strings.HasPrefix(token, PersonalTokenPrefix) {
@@ -96,7 +100,8 @@ func (s *Server) Verify(ctx context.Context, token string, _ *http.Request) (*mc
 		return nil, mcpauth.ErrInvalidToken
 	}
 	if err != nil {
-		return nil, err
+		s.Log.Error("verify access token", "err", err)
+		return nil, errVerify
 	}
 	return &mcpauth.TokenInfo{UserID: u.ID, Expiration: t.ExpiresAt, Extra: map[string]any{"email": u.Email}}, nil
 }

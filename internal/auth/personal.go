@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
-	"fmt"
 	"strings"
 	"time"
 
@@ -64,11 +63,14 @@ func (s *Server) verifyPersonal(ctx context.Context, token string) (*mcpauth.Tok
 		return nil, mcpauth.ErrInvalidToken
 	}
 	if err != nil {
-		return nil, err
+		s.Log.Error("verify personal token", "err", err)
+		return nil, errVerify
 	}
 	scope, err := tools.ParseScope(s.Integrations, p.Scope)
 	if err != nil {
-		return nil, fmt.Errorf("personal token %s: %w", p.ID, err)
+		// Usually its scope names an integration that has since been turned off.
+		s.Log.Warn("personal token refused", "token", p.ID, "reason", err)
+		return nil, mcpauth.ErrInvalidToken
 	}
 	// The SDK needs an expiry; a token without one is re-checked on every request anyway.
 	exp := time.Now().Add(time.Hour)
