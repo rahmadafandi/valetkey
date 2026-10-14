@@ -40,10 +40,17 @@ func (l *Loki) Fields() []tools.Field {
 
 func (l *Loki) Help() []string {
 	g := upstream.Origin(l.base)
+	if strings.Contains(l.base, "/api/datasources/proxy/") {
+		return []string{
+			"valetkey reads these logs through Grafana at " + g + ".",
+			"Easiest: leave the token empty and enter the username and password you use to sign in to " + g + ".",
+			"Or paste a Grafana service account token with the Viewer role (in Grafana: Administration, Users and access, Service accounts, Add token).",
+		}
+	}
 	return []string{
-		"These logs (Loki) are read through Grafana at " + g + ".",
-		"Easiest: leave the token empty and enter the username and password you use to sign in to " + g + ".",
-		"Or paste a Grafana service account token (Grafana: Administration, Users and access, Service accounts, Add token) with the Viewer role.",
+		"valetkey talks to the Loki API at " + g + " directly, not through Grafana.",
+		"Enter what the gateway in front of that API asks for: its username and password, or a bearer token in the Token field.",
+		"Ask whoever runs the gateway if you do not have these.",
 	}
 }
 func (l *Loki) Validate(ctx context.Context, c tools.Creds) error {

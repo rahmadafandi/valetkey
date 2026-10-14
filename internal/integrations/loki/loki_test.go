@@ -127,3 +127,21 @@ func TestNonLokiBodyIsAnError(t *testing.T) {
 		}
 	}
 }
+
+func TestHelpFollowsTheURL(t *testing.T) {
+	grafana := strings.Join(New("https://grafana.example.com/api/datasources/proxy/uid/logs", false).Help(), " ")
+	for _, want := range []string{"through Grafana at https://grafana.example.com", "Viewer role"} {
+		if !strings.Contains(grafana, want) {
+			t.Errorf("Grafana URL: help misses %q: %s", want, grafana)
+		}
+	}
+	direct := strings.Join(New("https://loki.example.com", false).Help(), " ")
+	for _, want := range []string{"talks to the Loki API at https://loki.example.com directly", "gateway"} {
+		if !strings.Contains(direct, want) {
+			t.Errorf("direct URL: help misses %q: %s", want, direct)
+		}
+	}
+	if strings.Contains(direct, "Viewer role") || strings.Contains(direct, "service account") {
+		t.Errorf("direct URL: help still talks about Grafana accounts: %s", direct)
+	}
+}
