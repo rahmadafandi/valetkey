@@ -384,6 +384,7 @@ func (a *ArgoCD) Tools() []tools.Tool {
 				if strings.TrimSpace(x.App) == "" {
 					return "", errors.New("app is required")
 				}
+				body := "{}"
 				if x.ExpectedRevision != "" {
 					want := strings.ToLower(strings.TrimSpace(x.ExpectedRevision))
 					if len(want) < 7 {
@@ -396,8 +397,11 @@ func (a *ArgoCD) Tools() []tools.Tool {
 					if !strings.HasPrefix(strings.ToLower(s.FullRevision), want) {
 						return "", tools.Refuse("argocd_sync: app %s resolves to revision %s, not %s; check the app's target before syncing", x.App, s.Revision, want)
 					}
+					// Pin the sync to the checked commit, so a push in between cannot change what deploys.
+					b, _ := json.Marshal(map[string]string{"revision": s.FullRevision})
+					body = string(b)
 				}
-				if _, err := a.do(ctx, tok, http.MethodPost, "/api/v1/applications/"+url.PathEscape(x.App)+"/sync", "{}"); err != nil {
+				if _, err := a.do(ctx, tok, http.MethodPost, "/api/v1/applications/"+url.PathEscape(x.App)+"/sync", body); err != nil {
 					return "", err
 				}
 				s, err := a.app(ctx, tok, x.App, "")

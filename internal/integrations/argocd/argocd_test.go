@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -35,6 +36,7 @@ type fakeArgo struct {
 	statuses []string // returned in order; the last one repeats
 	synced   bool
 	syncs    int
+	syncBody string // body of the last sync POST
 }
 
 func newFake(t *testing.T, statuses ...string) *fakeArgo {
@@ -57,8 +59,10 @@ func newFake(t *testing.T, statuses ...string) *fakeArgo {
 			f.statuses = f.statuses[1:]
 		}
 	}))
-	mux.HandleFunc("POST /api/v1/applications/web/sync", authed(func(w http.ResponseWriter, _ *http.Request) {
+	mux.HandleFunc("POST /api/v1/applications/web/sync", authed(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
 		f.mu.Lock()
+		f.syncBody = string(body)
 		f.synced = true
 		f.syncs++
 		f.mu.Unlock()
@@ -267,11 +271,12 @@ func TestSyncExpectedRevision(t *testing.T) {
 		name, args, wantErr string
 		refused             bool
 		syncs               int
+		body                string // sync POST body
 	}{
-		{"match", `{"app":"web","expected_revision":"0123456"}`, "", false, 1},
-		{"mismatch", `{"app":"web","expected_revision":"fffffff"}`, "0123456789", true, 0},
-		{"too short", `{"app":"web","expected_revision":"0123"}`, "expected_revision needs at least 7 characters", false, 0},
-		{"omitted", `{"app":"web"}`, "", false, 1},
+		{"match", `{"app":"web","expected_revision":"0123456"}`, "", false, 1, `{"revision":"` + full + `"}`},
+		{"mismatch", `{"app":"web","expected_revision":"fffffff"}`, "0123456789", true, 0, ""},
+		{"too short", `{"app":"web","expected_revision":"0123"}`, "expected_revision needs at least 7 characters", false, 0, ""},
+		{"omitted", `{"app":"web"}`, "", false, 1, "{}"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -279,6 +284,9 @@ func TestSyncExpectedRevision(t *testing.T) {
 			out, err := run(t, a, "argocd_sync", tok, tc.args)
 			if f.syncs != tc.syncs {
 				t.Errorf("sync POSTs = %d, want %d", f.syncs, tc.syncs)
+			}
+			if f.syncBody != tc.body {
+				t.Errorf("sync body = %q, want %q", f.syncBody, tc.body)
 			}
 			if tc.wantErr == "" {
 				if err != nil || !strings.Contains(out, "sync triggered") {
