@@ -14,7 +14,6 @@ import (
 	"github.com/uptrace/bun/dialect/pgdialect"
 	"github.com/uptrace/bun/dialect/sqlitedialect"
 	"github.com/uptrace/bun/driver/pgdriver"
-	"github.com/uptrace/bun/migrate"
 	_ "modernc.org/sqlite"
 
 	"github.com/rahmadafandi/valetkey/internal/store/migrations"
@@ -146,7 +145,7 @@ func MigrationStatus(ctx context.Context, url string) (string, error) {
 		return "", err
 	}
 	defer db.Close()
-	m := migrate.NewMigrator(db, migrations.Migrations)
+	m := migrations.NewMigrator(db, migrations.Migrations)
 	if err := m.Init(ctx); err != nil {
 		return "", err
 	}

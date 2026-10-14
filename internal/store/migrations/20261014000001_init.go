@@ -84,7 +84,7 @@ type toolCall0001 struct {
 const cascadeUser = `(user_id) REFERENCES users (id) ON DELETE CASCADE`
 
 func init() {
-	Migrations.MustRegister(func(ctx context.Context, db *bun.DB) error {
+	Migrations.MustRegister(InTx(func(ctx context.Context, db bun.IDB) error {
 		tables := []struct {
 			model any
 			fks   []string
@@ -120,7 +120,7 @@ func init() {
 			}
 		}
 		return nil
-	}, func(context.Context, *bun.DB) error {
+	}), func(context.Context, *bun.DB) error {
 		return errors.New("0001_init cannot be undone")
 	})
 }
