@@ -156,7 +156,7 @@ func TestDialRefusesAnyPrivateAnswer(t *testing.T) {
 	} {
 		var l lookups
 		g := &Guard{Lookup: l.answer(addrs...)}
-		if _, err := get(t, g, "https://rebind.example:"+port+"/"); err == nil || !strings.Contains(err.Error(), "not a public address") {
+		if _, err := get(t, g, "https://rebind.example:"+port+"/"); !errors.Is(err, ErrNotPublic) || !strings.Contains(err.Error(), "not a public address") {
 			t.Errorf("%v: err = %v", addrs, err)
 		}
 	}
@@ -176,7 +176,7 @@ func TestDialRefusesIPLiteralsWithoutLookup(t *testing.T) {
 		"[fe80::1%25lo]", "[::1%25lo]", "[64:ff9b::7f00:1%25lo]", "[::7f00:1]",
 	} {
 		_, err := get(t, g, "https://"+host+":"+port+"/")
-		if err == nil || !strings.Contains(err.Error(), "not a public address") || strings.Contains(err.Error(), "resolves to") {
+		if !errors.Is(err, ErrNotPublic) || strings.Contains(err.Error(), "resolves to") {
 			t.Errorf("%s: err = %v", host, err)
 		}
 	}

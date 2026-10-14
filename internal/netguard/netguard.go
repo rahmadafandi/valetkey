@@ -118,9 +118,9 @@ func (g *Guard) dial(ctx context.Context, network, addr string) (net.Conn, error
 			switch {
 			case Public(a):
 			case literalErr == nil:
-				return nil, fmt.Errorf("netguard: %s is not a public address", host)
+				return nil, fmt.Errorf("netguard: %s is %w", host, ErrNotPublic)
 			default:
-				return nil, fmt.Errorf("netguard: %s resolves to %s, which is not a public address", host, a)
+				return nil, fmt.Errorf("netguard: %s resolves to %s, which is %w", host, a, ErrNotPublic)
 			}
 		}
 	}
@@ -136,6 +136,11 @@ func (g *Guard) dial(ctx context.Context, network, addr string) (net.Conn, error
 	}
 	return nil, err
 }
+
+// ErrNotPublic marks a dial refused because the host is, or resolves to, a
+// private, loopback or other non-public address. The wrapping error names the
+// address, so it belongs in logs, not in pages.
+var ErrNotPublic = errors.New("not a public address")
 
 var errTooLarge = fmt.Errorf("netguard: response body is larger than %d bytes", MaxBody)
 
