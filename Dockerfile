@@ -11,7 +11,7 @@ RUN GOOS=$TARGETOS GOARCH=$TARGETARCH CGO_ENABLED=0 go build -trimpath -ldflags=
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates
 COPY --from=build /valetkey /valetkey
-COPY catalog.json /
+COPY --chmod=0444 catalog.json /
 RUN mkdir /data && chown 65532:65532 /data
 VOLUME /data
 ENV TZ=UTC CATALOG_FILE=/catalog.json DATABASE_URL=sqlite:///data/valetkey.db
