@@ -62,7 +62,7 @@ func newEnv(t *testing.T) *env {
 	cr := creds.Store{DB: st, Vault: v, Log: slog.New(slog.DiscardHandler)}
 	ts := httptest.NewUnstartedServer(nil)
 	pub := "http://" + ts.Listener.Addr().String()
-	as := &auth.Server{Store: st, Signer: auth.NewSigner([]byte(strings.Repeat("k", 32))), PublicURL: pub,
+	as := &auth.Server{Store: st, Signer: auth.NewSigner([]byte(strings.Repeat("k", 32))), PublicURL: pub, SessionTTL: time.Hour,
 		Integrations: []tools.Integration{fakeInt{}}}
 	guard := &netguard.Guard{AllowHosts: []string{"127.0.0.1"}, Lookup: internalLookup}
 	px := &proxy.Proxy{Store: st, Creds: cr, Guard: guard, PublicURL: pub, Log: slog.New(slog.DiscardHandler)}

@@ -62,7 +62,7 @@ func TestEndToEnd(t *testing.T) {
 	cfg := config.Config{
 		PublicURL: pub, OIDCIssuer: "https://idp.example.com", OIDCClientID: "cid", AllowedDomains: []string{"example.com"},
 		VaultKey: bytes.Repeat([]byte{1}, 32), SessionKey: []byte(strings.Repeat("s", 32)),
-		AccessTTL: time.Hour, RefreshTTL: time.Hour,
+		AccessTTL: time.Hour, RefreshTTL: time.Hour, SessionTTL: time.Hour,
 		Upstreams:   map[string]config.Upstream{"jenkins": {URL: jenkins.URL}},
 		CatalogFile: filepath.Join(dir, "catalog.json"),
 	}
@@ -111,7 +111,7 @@ func TestEndToEnd(t *testing.T) {
 
 	// 4. Connect Jenkins through the web form.
 	rec := httptest.NewRecorder()
-	(&auth.Server{Signer: auth.NewSigner(cfg.SessionKey), PublicURL: pub}).SetSession(rec, u)
+	(&auth.Server{Signer: auth.NewSigner(cfg.SessionKey), PublicURL: pub, SessionTTL: time.Hour}).SetSession(rec, u)
 	req, _ := http.NewRequest("POST", pub+"/connect/jenkins", strings.NewReader(url.Values{"username": {"alice"}, "token": {"tok"}}.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Origin", pub)
@@ -225,7 +225,7 @@ func TestProxiedToolEndToEnd(t *testing.T) {
 	cfg := config.Config{
 		PublicURL: pub, OIDCIssuer: "https://idp.example.com", OIDCClientID: "cid", AllowedDomains: []string{"example.com"},
 		VaultKey: bytes.Repeat([]byte{1}, 32), SessionKey: []byte(strings.Repeat("s", 32)),
-		AccessTTL: time.Hour, RefreshTTL: time.Hour, Upstreams: map[string]config.Upstream{},
+		AccessTTL: time.Hour, RefreshTTL: time.Hour, SessionTTL: time.Hour, Upstreams: map[string]config.Upstream{},
 		UpstreamAllowHosts: []string{"127.0.0.1"}, CatalogFile: filepath.Join(t.TempDir(), "none.json"),
 	}
 	h, err := buildHandler(cfg, st, oauth2.Endpoint{}, slog.New(slog.DiscardHandler))
@@ -253,7 +253,7 @@ func TestProxiedToolEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec := httptest.NewRecorder()
-	(&auth.Server{Signer: auth.NewSigner(cfg.SessionKey), PublicURL: pub}).SetSession(rec, u)
+	(&auth.Server{Signer: auth.NewSigner(cfg.SessionKey), PublicURL: pub, SessionTTL: time.Hour}).SetSession(rec, u)
 	cookie := rec.Result().Cookies()[0]
 	do := func(method, path string, form url.Values) (int, string) {
 		req, _ := http.NewRequest(method, pub+path, strings.NewReader(form.Encode()))

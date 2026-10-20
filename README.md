@@ -208,6 +208,7 @@ Names and defaults match [.env.example](.env.example).
 | `DATABASE_URL` | no | `sqlite://./valetkey.db` | `sqlite://` path or `postgres://` URL. The image sets `sqlite:///data/valetkey.db` |
 | `ACCESS_TOKEN_TTL` | no | `1h` | Lifetime of an OAuth access token |
 | `REFRESH_TOKEN_TTL` | no | `720h` | Lifetime of an OAuth refresh token |
+| `SESSION_TTL` | no | `12h` | How long a sign-in to the web pages lasts |
 | `CATALOG_FILE` | no | `catalog.json` | JSON list of other MCP servers shown on the home page |
 | `TZ` | no | `UTC` in the image | Zone for query times written without an offset |
 | `JENKINS_URL`, `JENKINS_INSECURE` | no | | Turns Jenkins on, `true` skips TLS verification |

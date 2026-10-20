@@ -131,7 +131,7 @@ func buildHandler(cfg config.Config, st *store.Store, idp oauth2.Endpoint, log *
 			Config: &oauth2.Config{ClientID: cfg.OIDCClientID, ClientSecret: cfg.OIDCClientSecret, Endpoint: idp,
 				RedirectURL: cfg.PublicURL + "/oauth/oidc/callback", Scopes: []string{"openid", "email"}}},
 		PublicURL: cfg.PublicURL,
-		AccessTTL: cfg.AccessTTL, RefreshTTL: cfg.RefreshTTL, Log: log,
+		AccessTTL: cfg.AccessTTL, RefreshTTL: cfg.RefreshTTL, SessionTTL: cfg.SessionTTL, Log: log,
 		Integrations: ints,
 	}
 	guard := &netguard.Guard{AllowHosts: cfg.UpstreamAllowHosts}

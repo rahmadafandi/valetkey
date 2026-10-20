@@ -40,8 +40,8 @@ func TestLoadValid(t *testing.T) {
 	if strings.Join(c.AllowedDomains, ",") != "example.com,example.org" {
 		t.Errorf("AllowedDomains = %v", c.AllowedDomains)
 	}
-	if c.Addr != ":8080" || c.AccessTTL != time.Hour || c.RefreshTTL != 720*time.Hour {
-		t.Errorf("defaults: addr=%q access=%v refresh=%v", c.Addr, c.AccessTTL, c.RefreshTTL)
+	if c.Addr != ":8080" || c.AccessTTL != time.Hour || c.RefreshTTL != 720*time.Hour || c.SessionTTL != 12*time.Hour {
+		t.Errorf("defaults: addr=%q access=%v refresh=%v session=%v", c.Addr, c.AccessTTL, c.RefreshTTL, c.SessionTTL)
 	}
 	if c.CatalogFile != "catalog.json" {
 		t.Errorf("catalog file: %q", c.CatalogFile)
@@ -132,7 +132,7 @@ func TestLoadPublicURL(t *testing.T) {
 }
 
 func TestLoadRejectsNonPositiveTTL(t *testing.T) {
-	for _, k := range []string{"ACCESS_TOKEN_TTL", "REFRESH_TOKEN_TTL"} {
+	for _, k := range []string{"ACCESS_TOKEN_TTL", "REFRESH_TOKEN_TTL", "SESSION_TTL"} {
 		for _, v := range []string{"0s", "-1h"} {
 			m := valid()
 			m[k] = v

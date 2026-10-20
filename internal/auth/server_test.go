@@ -51,7 +51,7 @@ func newEnv(t *testing.T, claims map[string]any) *env {
 			Config: &oauth2.Config{ClientID: "gid", ClientSecret: "gs", RedirectURL: pub + "/oauth/oidc/callback",
 				Endpoint: oauth2.Endpoint{AuthURL: idp.URL + "/auth", TokenURL: idp.URL + "/token"}, Scopes: []string{"openid", "email"}}},
 		PublicURL: pub,
-		AccessTTL: time.Hour, RefreshTTL: 720 * time.Hour, Log: slog.New(slog.DiscardHandler),
+		AccessTTL: time.Hour, RefreshTTL: 720 * time.Hour, SessionTTL: 12 * time.Hour, Log: slog.New(slog.DiscardHandler),
 		Integrations: []tools.Integration{j, bitbucket.New("https://bitbucket.example.com", false)},
 	}
 	mux := http.NewServeMux()

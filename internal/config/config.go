@@ -36,6 +36,7 @@ type Config struct {
 	SessionKey           []byte
 	AccessTTL            time.Duration
 	RefreshTTL           time.Duration
+	SessionTTL           time.Duration
 	Upstreams            map[string]Upstream // only systems whose URL is set
 	CatalogFile          string
 	UpstreamAllowHosts   []string // lowercase; user MCP servers on these hosts skip the public-address check
@@ -100,11 +101,17 @@ func Load(getenv func(string) string) (Config, error) {
 	if c.RefreshTTL, err = time.ParseDuration(or("REFRESH_TOKEN_TTL", "720h")); err != nil {
 		return Config{}, fmt.Errorf("REFRESH_TOKEN_TTL: %w", err)
 	}
+	if c.SessionTTL, err = time.ParseDuration(or("SESSION_TTL", "12h")); err != nil {
+		return Config{}, fmt.Errorf("SESSION_TTL: %w", err)
+	}
 	if c.AccessTTL <= 0 {
 		return Config{}, errors.New("ACCESS_TOKEN_TTL must be positive")
 	}
 	if c.RefreshTTL <= 0 {
 		return Config{}, errors.New("REFRESH_TOKEN_TTL must be positive")
+	}
+	if c.SessionTTL <= 0 {
+		return Config{}, errors.New("SESSION_TTL must be positive")
 	}
 	days, err := strconv.Atoi(or("AUDIT_RETENTION_DAYS", "90"))
 	if err != nil || days < 0 {

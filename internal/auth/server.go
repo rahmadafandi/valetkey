@@ -33,6 +33,7 @@ type Server struct {
 	PublicURL  string
 	AccessTTL  time.Duration
 	RefreshTTL time.Duration
+	SessionTTL time.Duration // how long a web sign-in lasts
 	Log        *slog.Logger
 	// Integrations are the enabled upstreams; a personal access token's scope
 	// is read against them.
@@ -42,7 +43,6 @@ type Server struct {
 const (
 	nonceCookie   = "vk_nonce"
 	sessionCookie = "vk_session"
-	sessionTTL    = 12 * time.Hour
 	codeTTL       = 10 * time.Minute
 )
 
@@ -107,11 +107,11 @@ func (s *Server) Verify(ctx context.Context, token string, _ *http.Request) (*mc
 }
 
 func (s *Server) SetSession(w http.ResponseWriter, u store.User) {
-	v, err := s.Signer.Sign("session", session{UserID: u.ID, Email: u.Email}, sessionTTL)
+	v, err := s.Signer.Sign("session", session{UserID: u.ID, Email: u.Email}, s.SessionTTL)
 	if err != nil {
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: v, Path: "/", MaxAge: int(sessionTTL.Seconds()),
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: v, Path: "/", MaxAge: int(s.SessionTTL.Seconds()),
 		HttpOnly: true, Secure: s.secure(), SameSite: http.SameSiteLaxMode})
 }
 
