@@ -34,7 +34,39 @@ func (n *Notion) System() string { return "notion" }
 func (n *Notion) Title() string  { return "Notion" }
 
 func (n *Notion) Fields() []tools.Field {
-	return []tools.Field{{Name: "token", Label: "Personal access token", Secret: true}}
+	return []tools.Field{
+		{Name: "token", Label: "Personal access token", Secret: true},
+		{Name: "token2", Label: "Token for a second workspace", Secret: true, Optional: true},
+		{Name: "token3", Label: "Token for a third workspace", Secret: true, Optional: true},
+	}
+}
+
+// tokenKeys are the credential keys of the workspace tokens, in the order tools try them.
+var tokenKeys = []string{"token", "token2", "token3"}
+
+// nameKey is where Validate keeps the name of the workspace the i-th token reaches.
+func nameKey(i int) string { return strings.Replace(tokenKeys[i], "token", "name", 1) }
+
+type space struct {
+	name string
+	c    tools.Creds // just this workspace's token, under "token"
+}
+
+// workspaces lists the user's Notion workspaces, one per token.
+func workspaces(c tools.Creds) []space {
+	var out []space
+	for i, k := range tokenKeys {
+		t := strings.TrimSpace(c[k])
+		if t == "" {
+			continue
+		}
+		name := c[nameKey(i)]
+		if name == "" {
+			name = fmt.Sprintf("workspace %d", i+1)
+		}
+		out = append(out, space{name, tools.Creds{"token": t}})
+	}
+	return out
 }
 
 func (n *Notion) Help() []string {
@@ -45,13 +77,34 @@ func (n *Notion) Help() []string {
 	}
 }
 
-// Validate asks Notion who the token belongs to.
+// Validate asks Notion who each token belongs to, and keeps in c the name of
+// the workspace each one reaches, which search labels its results with.
 func (n *Notion) Validate(ctx context.Context, c tools.Creds) error {
 	if strings.TrimSpace(c["token"]) == "" {
 		return errors.New("token is required")
 	}
-	_, err := n.do(ctx, c, http.MethodGet, "/users/me", nil, nil)
-	return err
+	for i, k := range tokenKeys {
+		t := strings.TrimSpace(c[k])
+		delete(c, nameKey(i))
+		if t == "" {
+			continue
+		}
+		var me struct {
+			Bot struct {
+				WorkspaceName string `json:"workspace_name"`
+			} `json:"bot"`
+		}
+		if _, err := n.do(ctx, tools.Creds{"token": t}, http.MethodGet, "/users/me", nil, &me); err != nil {
+			if i == 0 {
+				return err
+			}
+			return fmt.Errorf("token for workspace %d: %w", i+1, err)
+		}
+		if me.Bot.WorkspaceName != "" {
+			c[nameKey(i)] = me.Bot.WorkspaceName
+		}
+	}
+	return nil
 }
 
 var (

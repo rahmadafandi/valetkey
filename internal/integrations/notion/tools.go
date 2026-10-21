@@ -37,7 +37,7 @@ func (n *Notion) Tools() []tools.Tool {
 			Description: "Read one Notion page (read-only): its title, properties and content as markdown. " +
 				"Takes a page ID or a Notion link.",
 			Schema: tools.Object(map[string]any{"page_id": tools.Str("page ID or Notion link")}, "page_id"),
-			Run:    n.pageGet,
+			Run:    inAnyWorkspace(n.pageGet),
 		},
 		{
 			Name: "notion_database_query",
@@ -52,7 +52,7 @@ func (n *Notion) Tools() []tools.Tool {
 				"page_size":      tools.Int("rows to return (default 20, max 50)"),
 				"start_cursor":   tools.Str("next_cursor from an earlier call, to read on"),
 			}, "database_id"),
-			Run: n.databaseQuery,
+			Run: inAnyWorkspace(n.databaseQuery),
 		},
 		{
 			Name: "notion_page_create",
@@ -66,7 +66,7 @@ func (n *Notion) Tools() []tools.Tool {
 				"markdown":       tools.Str("page content as markdown"),
 			}, "parent_id", "parent_type", "title"),
 			Destructive: true,
-			Run:         n.pageCreate,
+			Run:         inAnyWorkspace(n.pageCreate),
 		},
 		{
 			Name:        "notion_page_append",
@@ -76,8 +76,27 @@ func (n *Notion) Tools() []tools.Tool {
 				"markdown": tools.Str("content to add, as markdown"),
 			}, "page_id", "markdown"),
 			Destructive: true,
-			Run:         n.pageAppend,
+			Run:         inAnyWorkspace(n.pageAppend),
 		},
+	}
+}
+
+type runFunc = func(ctx context.Context, c tools.Creds, raw json.RawMessage) (string, error)
+
+// inAnyWorkspace runs fn with each workspace's token in turn until one can open
+// what the call names: Notion answers 404 for an ID in another workspace.
+// ponytail: an ID in the third workspace costs two 404s first; remember which
+// workspace answered if users connect many.
+func inAnyWorkspace(fn runFunc) runFunc {
+	return func(ctx context.Context, c tools.Creds, raw json.RawMessage) (string, error) {
+		err := errors.New("no Notion token is connected")
+		for _, w := range workspaces(c) {
+			var out string
+			if out, err = fn(ctx, w.c, raw); !errors.Is(err, errNotFound) {
+				return out, err
+			}
+		}
+		return "", err
 	}
 }
 
@@ -104,51 +123,41 @@ func (n *Notion) search(ctx context.Context, c tools.Creds, raw json.RawMessage)
 	default:
 		return "", errors.New(`kind must be "page" or "database"`)
 	}
-	var r struct {
-		Results []json.RawMessage `json:"results"`
-	}
-	if _, err := n.do(ctx, c, http.MethodPost, "/search", body, &r); err != nil {
-		return "", err
-	}
-	w := newWalk(searchLookups)
+	ws := workspaces(c)
+	w := newWalk(searchLookups) // shared: the cap is for the whole search
 	var lines []string
 	hidden, unchecked := 0, 0
-	for _, item := range r.Results {
-		var o struct {
-			Object string `json:"object"`
+	for _, space := range ws {
+		label := ""
+		if len(ws) > 1 {
+			label = "[" + space.name + "] "
 		}
-		json.Unmarshal(item, &o)
-		var kind, id, line string
-		switch o.Object {
-		case "page":
-			var p page
-			json.Unmarshal(item, &p)
-			kind, id = "page", p.ID
-			line = fmt.Sprintf("page %s %q %s", p.ID, p.title(), p.URL)
-		case "data_source":
-			var d dataSource
-			json.Unmarshal(item, &d)
-			kind, id = "data_source", d.ID
-			line = fmt.Sprintf("database %s %q (data source %s)", d.Parent.DatabaseID, d.Title.String(), d.ID)
-		default:
+		var r struct {
+			Results []json.RawMessage `json:"results"`
+		}
+		if _, err := n.do(ctx, space.c, http.MethodPost, "/search", body, &r); err != nil {
+			if len(ws) == 1 {
+				return "", err
+			}
+			// One workspace's failing token should not hide the others.
+			lines = append(lines, label+"search failed: "+err.Error())
 			continue
 		}
-		ok, err := n.within(ctx, c, kind, id, w)
-		switch {
-		case errors.Is(err, errOverBudget) || errors.Is(err, errTooDeep):
-			unchecked++
-			continue
-		case errors.Is(err, errNotFound) || errors.Is(err, errForbidden):
-			hidden++
-			continue
-		case err != nil:
-			return "", err
+		for _, item := range r.Results {
+			line, ok, err := n.searchResult(ctx, space.c, item, w)
+			switch {
+			case errors.Is(err, errOverBudget) || errors.Is(err, errTooDeep):
+				unchecked++
+			case errors.Is(err, errNotFound) || errors.Is(err, errForbidden):
+				hidden++
+			case err != nil:
+				return "", err
+			case !ok:
+				hidden++
+			case line != "":
+				lines = append(lines, label+line)
+			}
 		}
-		if !ok {
-			hidden++
-			continue
-		}
-		lines = append(lines, line)
 	}
 	out := strings.Join(lines, "\n")
 	if len(lines) == 0 {
@@ -161,6 +170,32 @@ func (n *Notion) search(ctx context.Context, c tools.Creds, raw json.RawMessage)
 		out += fmt.Sprintf("\n(%d more results were not shown: checking them against this token's scope would take too many calls; search with more words)", unchecked)
 	}
 	return out, nil
+}
+
+// searchResult renders one search result, and whether it is within the call's
+// scope. It returns no line for an object search does not list.
+func (n *Notion) searchResult(ctx context.Context, c tools.Creds, item json.RawMessage, w *walk) (string, bool, error) {
+	var o struct {
+		Object string `json:"object"`
+	}
+	json.Unmarshal(item, &o)
+	var kind, id, line string
+	switch o.Object {
+	case "page":
+		var p page
+		json.Unmarshal(item, &p)
+		kind, id = "page", p.ID
+		line = fmt.Sprintf("page %s %q %s", p.ID, p.title(), p.URL)
+	case "data_source":
+		var d dataSource
+		json.Unmarshal(item, &d)
+		kind, id = "data_source", d.ID
+		line = fmt.Sprintf("database %s %q (data source %s)", d.Parent.DatabaseID, d.Title.String(), d.ID)
+	default:
+		return "", true, nil
+	}
+	ok, err := n.within(ctx, c, kind, id, w)
+	return line, ok, err
 }
 
 // properties renders a page's properties, title first, one per line.

@@ -70,7 +70,7 @@ An upstream is on when its `<SYSTEM>_URL` is set. Each person then connects thei
 | Metrics | `METRICS_URL` | API base URL, see below |
 | Notion | `NOTION_URL` | API root, `https://api.notion.com/v1` |
 
-**Notion.** Each person pastes a Notion personal access token, made at [notion.so/developers/tokens](https://www.notion.so/developers/tokens). It acts as that person and reaches every page they can open. Whether members may create one depends on the plan: on Free and by default on Business, only workspace owners can; on Plus everyone can; admins can widen it on Business and Enterprise. The tools search, read pages as markdown, query databases, create pages and add content to the end of a page. Nothing deletes, moves or edits existing content.
+**Notion.** Each person pastes a Notion personal access token, made at [notion.so/developers/tokens](https://www.notion.so/developers/tokens). It acts as that person and reaches every page they can open. Whether members may create one depends on the plan: on Free and by default on Business, only workspace owners can; on Plus everyone can; admins can widen it on Business and Enterprise. A token reaches one workspace, so the connect page takes up to three, one per workspace. Search looks in each and labels every result with its workspace; the other tools take an ID and use whichever token can open it. The tools search, read pages as markdown, query databases, create pages and add content to the end of a page. Nothing deletes, moves or edits existing content.
 
 Add `<SYSTEM>_INSECURE=true` to skip TLS verification for an endpoint with a self-signed certificate, for example `JENKINS_INSECURE=true`.
 

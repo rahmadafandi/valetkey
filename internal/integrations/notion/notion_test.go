@@ -344,3 +344,61 @@ func TestRateLimitSaysWhen(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+// twoWorkspaces answers token "a" with workspace Acme, which holds pageA, and
+// token "b" with workspace Beta, which holds pageB.
+func twoWorkspaces(t *testing.T) *httptest.Server {
+	type space struct{ name, page, title string }
+	spaces := map[string]space{"Bearer a": {"Acme", pageA, "Team"}, "Bearer b": {"Beta", pageB, "Ops"}}
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s, ok := spaces[r.Header.Get("Authorization")]
+		switch {
+		case !ok:
+			w.WriteHeader(401)
+			io.WriteString(w, `{"code":"unauthorized","message":"API token is invalid."}`)
+		case r.URL.Path == "/users/me":
+			io.WriteString(w, `{"object":"user","type":"bot","bot":{"workspace_name":"`+s.name+`"}}`)
+		case r.URL.Path == "/search":
+			io.WriteString(w, `{"results":[`+pageJSON(s.page, workspace, s.title)+`]}`)
+		case r.URL.Path == "/pages/"+s.page:
+			io.WriteString(w, pageJSON(s.page, workspace, s.title))
+		case r.URL.Path == "/pages/"+s.page+"/markdown":
+			io.WriteString(w, `{"markdown":"in `+s.name+`"}`)
+		default:
+			w.WriteHeader(404)
+			io.WriteString(w, `{"code":"object_not_found","message":"Could not find it"}`)
+		}
+	}))
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func TestWorkspaces(t *testing.T) {
+	n := New(twoWorkspaces(t).URL, false)
+	c := tools.Creds{"token": "a", "token2": "b"}
+	if err := n.Validate(ctx, c); err != nil || c["name"] != "Acme" || c["name2"] != "Beta" {
+		t.Fatalf("validate: %v %v", c, err)
+	}
+	if err := n.Validate(ctx, tools.Creds{"token": "a", "token3": "bad"}); err == nil || !strings.Contains(err.Error(), "workspace 3") {
+		t.Errorf("bad third token: %v", err)
+	}
+	raw, _ := json.Marshal(map[string]any{"query": ""})
+	out, err := tool(t, n, "notion_search").Run(ctx, c, raw)
+	if err != nil || !strings.Contains(out, `[Acme] page `+dashed(pageA)) || !strings.Contains(out, `[Beta] page `+dashed(pageB)) {
+		t.Errorf("search: %q, %v", out, err)
+	}
+	for id, want := range map[string]string{pageA: "in Acme", pageB: "in Beta"} {
+		raw, _ := json.Marshal(map[string]any{"page_id": id})
+		if out, err := tool(t, n, "notion_page_get").Run(ctx, c, raw); err != nil || !strings.Contains(out, want) {
+			t.Errorf("get %s: %q, %v", id, out, err)
+		}
+		// The token scope still applies, in whichever workspace the page is.
+		if _, err := tool(t, n, "notion_page_get").Run(scoped(pageX), c, raw); !tools.IsRefusal(err) {
+			t.Errorf("scoped get %s: %v", id, err)
+		}
+	}
+	raw, _ = json.Marshal(map[string]any{"page_id": pageX})
+	if _, err := tool(t, n, "notion_page_get").Run(ctx, c, raw); !errors.Is(err, errNotFound) {
+		t.Errorf("in no workspace: %v", err)
+	}
+}
