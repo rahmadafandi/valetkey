@@ -61,7 +61,12 @@ func (fake) Tools() []Tool {
 				return c["token"] + ":" + a.Msg, nil
 			}},
 		{Name: "bitbucket_fake", Description: "scoped by repo", Schema: Object(map[string]any{"repo": Str("repo")}),
-			Run: func(context.Context, Creds, json.RawMessage) (string, error) { return "reached", nil }},
+			Run: func(ctx context.Context, _ Creds, _ json.RawMessage) (string, error) {
+				if s, ok := ScopeOf(ctx); ok {
+					return fmt.Sprintf("reached within %v", s), nil
+				}
+				return "reached", nil
+			}},
 		{Name: "fake_deploy", Description: "deploy", Schema: Object(nil), Destructive: true,
 			Run: func(context.Context, Creds, json.RawMessage) (string, error) {
 				deploys.Add(1)
@@ -293,8 +298,11 @@ func TestRestrictedTokenSeesOnlyAllowedTools(t *testing.T) {
 
 func TestRestrictedTokenScope(t *testing.T) {
 	cs := connect(t, serve(t), "pat")
-	if text, isErr := call(t, cs, "bitbucket_fake", map[string]any{"repo": "acme/web"}); isErr || text != "reached" {
+	if text, isErr := call(t, cs, "bitbucket_fake", map[string]any{"repo": "acme/web"}); isErr || text != "reached within [acme/web]" {
 		t.Errorf("in scope: %q isErr=%v", text, isErr)
+	}
+	if text, isErr := call(t, connect(t, serve(t), "t1"), "bitbucket_fake", map[string]any{"repo": "acme/other"}); isErr || text != "reached" {
+		t.Errorf("signed-in client sees a token scope: %q isErr=%v", text, isErr)
 	}
 	if text, isErr := call(t, cs, "bitbucket_fake", map[string]any{"repo": "acme/other"}); !isErr || !strings.HasPrefix(text, "refused:") {
 		t.Errorf("out of scope: %q isErr=%v", text, isErr)

@@ -160,8 +160,10 @@ func handler(in Integration, t Tool, load LoadCreds, publicURL string, log *slog
 			case err != nil:
 			case t.Destructive && r.DryRun:
 				out, dryRun = fmt.Sprintf("dry-run: would call %s with %s", t.Name, truncate(string(req.Params.Arguments), 1024)), true
-			default:
+			case t.Unscoped:
 				out, err = run(ctx, in, t, load, userID, req.Params.Arguments, log)
+			default:
+				out, err = run(r.Scope.withScope(ctx, in), in, t, load, userID, req.Params.Arguments, log)
 			}
 		default:
 			out, err = run(ctx, in, t, load, userID, req.Params.Arguments, log)

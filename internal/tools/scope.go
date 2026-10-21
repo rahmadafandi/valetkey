@@ -2,6 +2,7 @@ package tools
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -67,6 +68,32 @@ func ParseScope(ints []Integration, raw []byte) (Scope, error) {
 		s[k] = parsed
 	}
 	return s, nil
+}
+
+type scopeCtxKey struct{}
+
+// ScopeOf returns the parsed scope a token gives the running tool's
+// integration. ok is false when no token limits the call, as for a signed-in
+// client. A Run that must ask its upstream whether something is in scope, such
+// as a page under an allowed page, reads it here.
+func ScopeOf(ctx context.Context) (scope any, ok bool) {
+	v, ok := ctx.Value(scopeCtxKey{}).(scopeValue)
+	return v.v, ok
+}
+
+type scopeValue struct{ v any }
+
+// WithScope hands a tool's Run the parsed scope a token gives its integration.
+func WithScope(ctx context.Context, scope any) context.Context {
+	return context.WithValue(ctx, scopeCtxKey{}, scopeValue{scope})
+}
+
+// withScope carries the token's scope for in into a tool's Run.
+func (s Scope) withScope(ctx context.Context, in Integration) context.Context {
+	if sc, ok := in.(Scoper); ok {
+		return WithScope(ctx, s[sc.ScopeKey()])
+	}
+	return ctx
 }
 
 // Check refuses a call whose arguments reach beyond the scope.
