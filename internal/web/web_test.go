@@ -445,3 +445,15 @@ func TestTokenFormFailsCleanlyWhenMCPLookupFails(t *testing.T) {
 		t.Errorf("status %d", code)
 	}
 }
+
+func TestFontsAreServed(t *testing.T) {
+	e := newEnv(t)
+	resp, err := http.Get(e.url + "/fonts/figtree-latin-400-normal.woff2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 || resp.Header.Get("Content-Type") != "font/woff2" {
+		t.Errorf("status %d, type %q", resp.StatusCode, resp.Header.Get("Content-Type"))
+	}
+}

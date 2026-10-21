@@ -74,6 +74,7 @@ type Web struct {
 }
 
 func (h *Web) Routes(mux *http.ServeMux) {
+	mux.Handle("GET /fonts/", ui.Fonts())
 	mux.HandleFunc("GET /{$}", h.home)
 	mux.HandleFunc("GET /connect/{system}", h.connectForm)
 	mux.HandleFunc("POST /connect/{system}", h.connectSubmit)
