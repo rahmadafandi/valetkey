@@ -348,11 +348,12 @@ func TestEveryPageHasThemeToggle(t *testing.T) {
 	}
 }
 
-func TestHomeKeepsOneAmberFocus(t *testing.T) {
+func TestHomeKeepsOneAccentAction(t *testing.T) {
 	e := newEnv(t)
 	_, body := e.get(t, "/", true)
-	if !strings.Contains(body, `<pre class="key">`+e.url+"/mcp</pre>") || regexp.MustCompile(`class="[^"]*\bprimary\b`).MatchString(body) {
-		t.Error("home should highlight only the MCP address, not the Connect buttons")
+	if !strings.Contains(body, `<code id="mcp-url">`+e.url+"/mcp</code>") || regexp.MustCompile(`class="[^"]*\bprimary\b`).MatchString(body) ||
+		strings.Count(body, `class="btn copy"`) != 1 {
+		t.Error("home should give the accent only to copying the MCP address, not to the Connect keys")
 	}
 }
 

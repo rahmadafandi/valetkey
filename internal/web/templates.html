@@ -7,16 +7,16 @@
 <body><div class="wrap">
 <div class="bar">
   <a class="mark" href="/">valetkey</a>
-  <button class="btn small" type="button" data-theme-toggle hidden>Switch to dark</button>
+  {{if .Email}}<nav class="nav" aria-label="Pages">
+    <a href="/"{{if eq .Here "home"}} aria-current="page"{{end}}>Home</a>
+    <a href="/tokens"{{if eq .Here "tokens"}} aria-current="page"{{end}}>Tokens</a>
+    <a href="/upstreams"{{if eq .Here "upstreams"}} aria-current="page"{{end}}>Servers</a>
+    <a href="/activity"{{if eq .Here "activity"}} aria-current="page"{{end}}>Activity</a>
+  </nav>{{end}}
+  <button class="btn small" type="button" data-theme-toggle hidden>Dark mode</button>
+  {{if .Email}}<span class="who">{{.Email}}</span>
+  <a class="out" href="/logout">Sign out</a>{{end}}
 </div>
-{{if .Email}}<nav class="nav" aria-label="Pages">
-  <a href="/"{{if eq .Here "home"}} aria-current="page"{{end}}>Home</a>
-  <a href="/tokens"{{if eq .Here "tokens"}} aria-current="page"{{end}}>Tokens</a>
-  <a href="/upstreams"{{if eq .Here "upstreams"}} aria-current="page"{{end}}>Servers</a>
-  <a href="/activity"{{if eq .Here "activity"}} aria-current="page"{{end}}>Activity</a>
-  <span class="who">{{.Email}}</span>
-  <a href="/logout">Sign out</a>
-</nav>{{end}}
 <main>{{end}}
 
 {{define "bottom"}}</main></div></body></html>{{end}}
@@ -36,53 +36,63 @@
 {{template "bottom"}}{{end}}
 
 {{define "home"}}{{template "top" (page "Home" .Email "home")}}
-<h1>Hello</h1>
-<p class="lead">Connect your tools once here. Then any AI client you add can use them, only in the ways you allow.</p>
-
-<section class="card" aria-labelledby="client-h">
-  <h2 id="client-h">Add valetkey to your AI client</h2>
-  <p class="muted">Add this address as a remote MCP server. The first time, your client asks you to sign in here.</p>
-  <pre class="key">{{.MCPURL}}</pre>
-  <p><strong>Claude Code</strong>: run</p>
-  <pre>claude mcp add --transport http valetkey {{.MCPURL}}</pre>
-  <p><strong>Claude Desktop or claude.ai</strong>: open Settings, then Connectors, choose Add custom connector and paste the address.</p>
-  <p><strong>Cursor</strong>: add this to <code>~/.cursor/mcp.json</code></p>
-  <pre>{"mcpServers": {"valetkey": {"url": "{{.MCPURL}}"}}}</pre>
-  <p class="muted">Any other client that speaks MCP with OAuth works the same way: give it the address above.</p>
+<section class="hello" aria-labelledby="hello-h">
+  <div>
+    <h1 id="hello-h">Hello. Your keys are on the ring.</h1>
+    <p class="lead">Each key is a tool your agents may use. Give an AI client this address, and it can open only what is on the ring, in the ways you allow.</p>
+    <div class="addr">
+      <code id="mcp-url">{{.MCPURL}}</code>
+      <button class="btn copy" type="button" data-copy="mcp-url" hidden>Copy</button>
+    </div>
+    <ul class="setup">
+      <li><strong>Claude Code</strong>: <code>claude mcp add --transport http valetkey {{.MCPURL}}</code></li>
+      <li><strong>Claude Desktop or claude.ai</strong>: Settings, then Connectors, then Add custom connector, and paste the address.</li>
+      <li><strong>Cursor</strong>: add <code>{"mcpServers": {"valetkey": {"url": "{{.MCPURL}}"}}}</code> to <code>~/.cursor/mcp.json</code></li>
+      <li>The first time, your client asks you to sign in here.</li>
+    </ul>
+  </div>
+  <div class="ring" role="group" aria-labelledby="ring-h">
+    <h2 id="ring-h" class="visually-hidden">Your connections</h2>
+    {{if .Systems}}
+    <ul class="keys">
+    {{range .Systems}}
+      <li><a class="key {{if .Connected}}on{{else}}off{{end}}" href="/connect/{{.System}}">
+        <span class="key-name">{{.Title}}</span>
+        <span class="visually-hidden">{{if .Connected}}Connected{{else}}Not connected{{end}}.</span>
+        <span class="key-act">{{if .Connected}}Manage{{else}}Connect{{end}}<span class="visually-hidden"> {{.Title}}</span></span></a></li>
+    {{end}}
+    </ul>
+    <p class="note">Solid keys are connected: valetkey checked the login and stored it encrypted. Pale ones are not on the ring yet.</p>
+    {{else}}
+    <p class="note">No tools are switched on for this server yet. Ask whoever runs valetkey to turn one on.</p>
+    {{end}}
+  </div>
 </section>
 
-<section class="card" aria-labelledby="conn-h">
-  <h2 id="conn-h">Your connections</h2>
-  <p class="muted">valetkey uses these to act for you. Each one is checked before it is saved, then stored encrypted.</p>
+<section class="opened" aria-labelledby="opened-h">
+  <div class="head">
+    <h2 id="opened-h">What your agents opened</h2>
+    <a href="/activity">See everything</a>
+  </div>
+  {{if .Calls}}
   <ul class="rows">
-  {{range .Systems}}
-    <li>
-      <span class="what">{{.Title}}: {{if .Connected}}<span class="state on">Connected</span>{{else}}<span class="state">Not connected</span>{{end}}</span>
-      <a class="btn small" href="/connect/{{.System}}">{{if .Connected}}Manage {{.Title}}{{else}}Connect {{.Title}}{{end}}</a>
-    </li>
-  {{else}}
-    <li class="muted">No tools are switched on for this server yet. Ask whoever runs valetkey to turn one on.</li>
+  {{range .Calls}}
+    <li><span class="outcome {{.Outcome}}">{{outcomeLabel .Outcome}}</span>
+      <span class="what"><code>{{.Tool}}</code></span>
+      <span class="meta">{{if .TokenName}}token {{.TokenName}}{{else}}signed-in client{{end}} · <span title="UTC">{{.At.UTC.Format "Jan 2 15:04"}}</span></span></li>
   {{end}}
   </ul>
+  {{else}}
+  <p class="muted">Nothing yet. When an agent uses one of your keys, it shows up here, allowed or refused.</p>
+  {{end}}
 </section>
 
-<section class="card" aria-labelledby="ups-h">
-  <h2 id="ups-h">Your MCP servers</h2>
-  <p class="muted">Remote MCP servers you use yourself. Sign in to one here, pick which of its tools to allow, and your agents reach them through valetkey.</p>
-  <p><a href="/upstreams">Manage your MCP servers</a></p>
-</section>
-
-<section class="card" aria-labelledby="tok-h">
-  <h2 id="tok-h">Tokens for bots</h2>
-  <p class="muted">For scripts and bots that cannot sign in through a browser. Each token reaches only the tools and the jobs, repositories or logs you pick.</p>
-  <p><a href="/tokens">Manage your tokens</a></p>
-</section>
-
-<section class="card" aria-labelledby="act-h">
-  <h2 id="act-h">Activity</h2>
-  <p class="muted">Every tool call made with your connections, including the ones valetkey refused.</p>
-  <p><a href="/activity">See what your agents did</a></p>
-</section>
+<div class="more">
+  <a class="spare" href="/tokens"><strong>Spare keys for bots</strong>
+    <span>A token is a smaller ring for a script: only the tools you pick, a cap on changes an hour, or a dry run.</span></a>
+  <a href="/upstreams"><strong>Your MCP servers</strong>
+    <span class="muted">Put remote MCP servers you use on the same ring, behind the same rules.</span></a>
+</div>
 
 {{if .Catalog}}
 <section class="card" aria-labelledby="cat-h">
@@ -215,7 +225,7 @@
     <div><label for="f-tool">Tool</label><input id="f-tool" name="tool" value="{{.Filter.Tool}}" autocomplete="off" class="mono"></div>
     <div><label for="f-outcome">Outcome</label><select id="f-outcome" name="outcome">
       <option value="">Any</option>
-      {{range $o := (list "ok" "error" "refused" "dry_run")}}<option value="{{$o}}" {{if eq $o $.Filter.Outcome}}selected{{end}}>{{$o}}</option>{{end}}
+      {{range $o := (list "ok" "error" "refused" "dry_run")}}<option value="{{$o}}" {{if eq $o $.Filter.Outcome}}selected{{end}}>{{outcomeLabel $o}}</option>{{end}}
     </select></div>
     {{if .Admin}}<div><label for="f-user">User email</label><input id="f-user" name="user" type="email" value="{{.Filter.Email}}" autocomplete="off"></div>{{end}}
     <button class="btn" type="submit">Filter</button>
@@ -224,7 +234,7 @@
   <ul class="rows">
   {{range .Calls}}
     <li class="call">
-      <div><code>{{.Tool}}</code> <span class="outcome {{.Outcome}}">{{.Outcome}}</span></div>
+      <div><code>{{.Tool}}</code> <span class="outcome {{.Outcome}}">{{outcomeLabel .Outcome}}</span></div>
       <div class="meta">{{.At.UTC.Format "2006-01-02 15:04:05"}} UTC · {{if .TokenName}}token {{.TokenName}}{{else}}signed-in client{{end}}{{if $.Admin}} · {{.Email}}{{end}} · {{.MS}} ms</div>
       {{if .Message}}<p class="msg{{if or (eq .Outcome "refused") (eq .Outcome "error")}} error{{end}}">{{.Message}}</p>{{end}}
       <details><summary>Arguments</summary><pre>{{.Args}}</pre></details>

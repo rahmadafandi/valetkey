@@ -33,6 +33,8 @@ var templatesHTML string
 var tmpl = template.Must(template.New("").Funcs(template.FuncMap{
 	"list": func(v ...string) []string { return v },
 	"head": func() template.HTML { return ui.Head },
+	// outcomeLabel turns a stored outcome into the words a page shows.
+	"outcomeLabel": func(o string) string { return strings.ReplaceAll(o, "_", " ") },
 	// page carries what the shared header needs; here marks the current nav item.
 	"page": func(title, email, here string) map[string]string {
 		return map[string]string{"Title": title, "Email": email, "Here": here}
@@ -107,8 +109,13 @@ func (h *Web) home(w http.ResponseWriter, r *http.Request) {
 			rows = append(rows, systemRow{in.System(), in.Title(), connected[in.System()]})
 		}
 	}
+	calls, err := h.Auth.Store.ListCalls(r.Context(), store.CallFilter{UserID: u.ID, Limit: 5})
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
 	render(w, http.StatusOK, "home", map[string]any{
-		"Email": u.Email, "MCPURL": h.PublicURL + "/mcp", "Systems": rows, "Catalog": h.Catalog,
+		"Email": u.Email, "MCPURL": h.PublicURL + "/mcp", "Systems": rows, "Calls": calls, "Catalog": h.Catalog,
 	})
 }
 
