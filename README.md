@@ -6,7 +6,7 @@ valetkey is a self-hosted MCP server that lets AI agents do operations work (ope
 
 A token does not only name the tools an agent may call. It names the resources those tools may reach: this repository, these Jenkins jobs, that log stream. Write tools refuse to act on stale state and hand back something to wait on. Each token has a write limit per hour and an optional dry run, and every call to a tool on the token's list is logged, refused ones included.
 
-valetkey is not a general MCP gateway. It can put the remote MCP servers each person adds behind the same front door (see [Your own MCP servers](#your-own-mcp-servers)), but those tools get no resource scope. If you want a gateway with policy for many MCP servers, [Obot](https://github.com/obot-platform/obot), [Bifrost](https://github.com/maximhq/bifrost) and [IBM ContextForge](https://github.com/IBM/mcp-context-forge) do that. Choose valetkey when your concern is what an agent can reach and change in Jenkins, Argo CD, Loki, Prometheus and Bitbucket Cloud, and you want that written down per token.
+valetkey is not a general MCP gateway. It can put the remote MCP servers each person adds behind the same front door (see [Your own MCP servers](#your-own-mcp-servers)), but those tools get no resource scope. If you want a gateway with policy for many MCP servers, [Obot](https://github.com/obot-platform/obot), [Bifrost](https://github.com/maximhq/bifrost) and [IBM ContextForge](https://github.com/IBM/mcp-context-forge) do that. Choose valetkey when your concern is what an agent can reach and change in Jenkins, Argo CD, Loki, Prometheus, Bitbucket Cloud and Notion, and you want that written down per token.
 
 ## Quickstart
 
@@ -68,6 +68,9 @@ An upstream is on when its `<SYSTEM>_URL` is set. Each person then connects thei
 | Bitbucket Cloud | `BITBUCKET_URL` | API root, `https://api.bitbucket.org/2.0` |
 | Loki | `LOKI_URL` | API base URL, see below |
 | Metrics | `METRICS_URL` | API base URL, see below |
+| Notion | `NOTION_URL` | API root, `https://api.notion.com/v1` |
+
+**Notion.** Each person pastes a Notion personal access token, made at [notion.so/developers/tokens](https://www.notion.so/developers/tokens). It acts as that person and reaches every page they can open. Whether members may create one depends on the plan: on Free and by default on Business, only workspace owners can; on Plus everyone can; admins can widen it on Business and Enterprise. The tools search, read pages as markdown, query databases, create pages and add content to the end of a page. Nothing deletes, moves or edits existing content.
 
 Add `<SYSTEM>_INSECURE=true` to skip TLS verification for an endpoint with a self-signed certificate, for example `JENKINS_INSECURE=true`.
 
@@ -140,6 +143,7 @@ The form asks for:
 | `jenkins` | A job path, or a list of them | `"jenkins": ["deploy-web", "folder/deploy-api"]` | the job in `jobURL` is not in the list |
 | `loki` | One stream selector | `"loki": "{app=\"web\"}"` | any stream selector in the query differs from it, or the query has none |
 | `argocd` | An app name, or a list of them | `"argocd": ["web", "api"]` | the `app` argument is not in the list |
+| `notion` | A page or database ID or link, or a list of them | `"notion": ["https://www.notion.so/acme/Runbooks-1a2b..."]` | the page or database is neither listed nor inside a listed one, which valetkey asks Notion by walking up to 12 parents; search hides results outside it. In dry run a write is not checked, since nothing is sent |
 | `metrics` | One set of `label="value"` matchers | `"metrics": "{namespace=\"web\"}"` | any series selector in the query lacks one of the matchers, including a bare `sum(up)`, or the query cannot be parsed |
 
 A whole scope for a token that deploys one service looks like this:
@@ -158,7 +162,7 @@ A key must belong to an upstream you have turned on, and a mistyped key is refus
 
 ### Write limit and dry run
 
-The write limit counts a token's calls to tools that change things (`bitbucket_pr_create`, `bitbucket_pr_merge`, `bitbucket_pr_comment`, `jenkins_deploy`, `jenkins_rebuild`, `argocd_sync`) over the last hour. Calls that ended in `ok`, `error` or `dry_run` count. When the limit is reached, the next write is refused until older calls fall out of the hour. One token's limited writes run one at a time, from the count until the call is recorded, so parallel calls cannot overshoot the limit. A write waits while an earlier write on the same token is still running. The limit holds within one valetkey process; running several replicas against one database would let each replica count on its own. OAuth sessions have no write limit.
+The write limit counts a token's calls to tools that change things (`bitbucket_pr_create`, `bitbucket_pr_merge`, `bitbucket_pr_comment`, `jenkins_deploy`, `jenkins_rebuild`, `argocd_sync`, `notion_page_create`, `notion_page_append`) over the last hour. Calls that ended in `ok`, `error` or `dry_run` count. When the limit is reached, the next write is refused until older calls fall out of the hour. One token's limited writes run one at a time, from the count until the call is recorded, so parallel calls cannot overshoot the limit. A write waits while an earlier write on the same token is still running. The limit holds within one valetkey process; running several replicas against one database would let each replica count on its own. OAuth sessions have no write limit.
 
 A dry-run token goes through the scope and limit checks, then answers `dry-run: would call <tool> with <args>` without contacting the upstream. Read tools run as usual.
 
@@ -216,6 +220,7 @@ Names and defaults match [.env.example](.env.example).
 | `LOKI_URL`, `LOKI_INSECURE` | no | | Turns Loki on, `true` skips TLS verification |
 | `METRICS_URL`, `METRICS_INSECURE` | no | | Turns metrics on, `true` skips TLS verification |
 | `BITBUCKET_URL`, `BITBUCKET_INSECURE` | no | | Turns Bitbucket on, `true` skips TLS verification |
+| `NOTION_URL`, `NOTION_INSECURE` | no | | Turns Notion on, `true` skips TLS verification |
 | `UPSTREAM_ALLOW_HOSTS` | no | | Exact host names of MCP servers that may use http and skip the address check, comma-separated |
 
 ## More

@@ -13,7 +13,7 @@ import (
 )
 
 // Systems are the upstreams valetkey integrates; each is enabled by <SYSTEM>_URL.
-var Systems = []string{"jenkins", "argocd", "loki", "metrics", "bitbucket"}
+var Systems = []string{"jenkins", "argocd", "loki", "metrics", "bitbucket", "notion"}
 
 type Upstream struct {
 	URL      string
