@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -28,7 +29,7 @@ func TestPersonalToken(t *testing.T) {
 		t.Fatalf("verify: %+v %v", ti, err)
 	}
 	r := tools.RestrictionOf(ti)
-	if r == nil || r.Name != "atlas" || !r.Allows("jenkins_deploy") || r.Allows("jenkins_rebuild") || r.Scope["bitbucket"] != "acme/web" {
+	if r == nil || r.Name != "atlas" || !r.Allows("jenkins_deploy") || r.Allows("jenkins_rebuild") || !slices.Equal(r.Scope["bitbucket"].([]string), []string{"acme/web"}) {
 		t.Fatalf("restriction: %+v", r)
 	}
 

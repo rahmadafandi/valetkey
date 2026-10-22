@@ -139,7 +139,7 @@ The form asks for:
 
 | Key | Value | Example | A call is refused when |
 |---|---|---|---|
-| `bitbucket` | One repository, `workspace/slug` | `"bitbucket": "acme/web"` | the `repo` argument is a different repository |
+| `bitbucket` | One repository, `workspace/slug`, or a list | `"bitbucket": ["acme/web", "acme/api"]` | the `repo` argument is not listed |
 | `jenkins` | A job path, or a list of them | `"jenkins": ["deploy-web", "folder/deploy-api"]` | the job in `jobURL` is not in the list |
 | `loki` | One stream selector | `"loki": "{app=\"web\"}"` | any stream selector in the query differs from it, or the query has none |
 | `argocd` | An app name, or a list of them | `"argocd": ["web", "api"]` | the `app` argument is not in the list |

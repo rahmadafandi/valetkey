@@ -3,6 +3,8 @@ package bitbucket
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/rahmadafandi/valetkey/internal/tools"
@@ -10,27 +12,28 @@ import (
 
 func (b *Bitbucket) ScopeKey() string { return "bitbucket" }
 
-// ParseScope reads one repository as "workspace/slug".
+// ParseScope reads one repository as "workspace/slug", or a list of them.
 func (b *Bitbucket) ParseScope(raw json.RawMessage) (any, error) {
-	var repo string
-	if err := json.Unmarshal(raw, &repo); err != nil {
-		return nil, errors.New(`expected one repository string such as "acme/web"`)
+	repos, err := tools.StringOrList(raw)
+	if err != nil {
+		return nil, errors.New(`expected a repository such as "acme/web", or a list of them`)
 	}
-	repo = strings.TrimSpace(repo)
-	if _, err := repoPath(repo); err != nil {
-		return nil, errors.New(`expected one repository as "workspace/slug", e.g. "acme/web"`)
+	for _, r := range repos {
+		if _, err := repoPath(r); err != nil {
+			return nil, fmt.Errorf(`expected each repository as "workspace/slug", e.g. "acme/web"; got %q`, r)
+		}
 	}
-	return repo, nil
+	return repos, nil
 }
 
 func (b *Bitbucket) CheckScope(scope any, tool string, args json.RawMessage) error {
-	allowed := scope.(string)
+	allowed := scope.([]string)
 	var a struct {
 		Repo string `json:"repo"`
 	}
 	json.Unmarshal(args, &a)
-	if a.Repo != allowed {
-		return tools.Refuse("%s: repository %q is outside this token's scope; it allows %s", tool, a.Repo, allowed)
+	if !slices.Contains(allowed, a.Repo) {
+		return tools.Refuse("%s: repository %q is outside this token's scope; it allows %s", tool, a.Repo, strings.Join(allowed, ", "))
 	}
 	return nil
 }
