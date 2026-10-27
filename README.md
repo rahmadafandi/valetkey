@@ -141,7 +141,7 @@ The form asks for:
 |---|---|---|---|
 | `bitbucket` | One repository, `workspace/slug`, or a list | `"bitbucket": ["acme/web", "acme/api"]` | the `repo` argument is not listed |
 | `jenkins` | A job path, or a list of them | `"jenkins": ["deploy-web", "folder/deploy-api"]` | the job in `jobURL` is not in the list |
-| `loki` | One stream selector | `"loki": "{app=\"web\"}"` | any stream selector in the query differs from it, or the query has none |
+| `loki` | One stream selector, or a list | `"loki": ["{app=\"web\"}", "{app=\"api\"}"]` | a stream selector in the query is not listed, or the query has none |
 | `argocd` | An app name, or a list of them | `"argocd": ["web", "api"]` | the `app` argument is not in the list |
 | `notion` | A page or database ID or link, or a list of them | `"notion": ["https://www.notion.so/acme/Runbooks-1a2b..."]` | the page or database is neither listed nor inside a listed one, which valetkey asks Notion by walking up to 12 parents; search hides results outside it. In dry run a write is not checked, since nothing is sent |
 | `metrics` | One set of `label="value"` matchers | `"metrics": "{namespace=\"web\"}"` | any series selector in the query lacks one of the matchers, including a bare `sum(up)`, or the query cannot be parsed |

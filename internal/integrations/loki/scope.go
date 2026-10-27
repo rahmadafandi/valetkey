@@ -3,6 +3,8 @@ package loki
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 	"unicode"
 
@@ -11,34 +13,37 @@ import (
 
 func (l *Loki) ScopeKey() string { return "loki" }
 
-// ParseScope reads one LogQL stream selector, e.g. {app="web"}.
+// ParseScope reads one LogQL stream selector, e.g. {app="web"}, or a list of them.
 func (l *Loki) ParseScope(raw json.RawMessage) (any, error) {
-	var sel string
-	if err := json.Unmarshal(raw, &sel); err != nil {
-		return nil, errors.New(`expected one stream selector string such as {app="web"}`)
+	list, err := tools.StringOrList(raw)
+	if err != nil {
+		return nil, errors.New(`expected a stream selector such as {app="web"}, or a list of them`)
 	}
-	sel = strings.TrimSpace(sel)
-	selectors, ok := streamSelectors(sel)
-	if !ok || len(selectors) != 1 || !strings.HasPrefix(sel, "{") || !strings.HasSuffix(sel, "}") {
-		return nil, errors.New(`expected one stream selector such as {app="web"}`)
+	out := make([]string, 0, len(list))
+	for _, sel := range list {
+		selectors, ok := streamSelectors(sel)
+		if !ok || len(selectors) != 1 || !strings.HasPrefix(sel, "{") || !strings.HasSuffix(sel, "}") {
+			return nil, fmt.Errorf(`expected each entry to be one stream selector such as {app="web"}; got %s`, sel)
+		}
+		out = append(out, selectors[0])
 	}
-	return selectors[0], nil
+	return out, nil
 }
 
-// CheckScope requires every stream selector in the query to equal the scoped one.
+// CheckScope requires every stream selector in the query to be a scoped one.
 func (l *Loki) CheckScope(scope any, tool string, args json.RawMessage) error {
-	allowed := scope.(string)
+	allowed := scope.([]string)
 	var a struct {
 		Query string `json:"query"`
 	}
 	json.Unmarshal(args, &a)
 	selectors, ok := streamSelectors(a.Query)
 	if !ok || len(selectors) == 0 {
-		return tools.Refuse("%s: the query has no stream selector; this token allows %s", tool, allowed)
+		return tools.Refuse("%s: the query has no stream selector; this token allows %s", tool, strings.Join(allowed, ", "))
 	}
 	for _, sel := range selectors {
-		if sel != allowed {
-			return tools.Refuse("%s: stream selector %s is outside this token's scope; it allows %s", tool, sel, allowed)
+		if !slices.Contains(allowed, sel) {
+			return tools.Refuse("%s: stream selector %s is outside this token's scope; it allows %s", tool, sel, strings.Join(allowed, ", "))
 		}
 	}
 	return nil

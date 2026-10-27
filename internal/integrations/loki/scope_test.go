@@ -2,6 +2,7 @@ package loki
 
 import (
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/rahmadafandi/valetkey/internal/tools"
@@ -9,10 +10,13 @@ import (
 
 func TestParseScope(t *testing.T) {
 	l := &Loki{}
-	if v, err := l.ParseScope(json.RawMessage(`" { app = \"web\" } "`)); err != nil || v != `{app="web"}` {
+	if v, err := l.ParseScope(json.RawMessage(`" { app = \"web\" } "`)); err != nil || !slices.Equal(v.([]string), []string{`{app="web"}`}) {
 		t.Errorf("selector: %v %v", v, err)
 	}
-	for _, bad := range []string{`3`, `""`, `null`, `"job"`, `"{a=\"b\"} or {c=\"d\"}"`, `"{a=\"b\"} |= \"x\""`, `"{a=\"b\""`, `["{a=\"b\"}"]`} {
+	if v, err := l.ParseScope(json.RawMessage(`["{app=\"web\"}", "{ app = \"api\" }"]`)); err != nil || !slices.Equal(v.([]string), []string{`{app="web"}`, `{app="api"}`}) {
+		t.Errorf("list: %v %v", v, err)
+	}
+	for _, bad := range []string{`3`, `""`, `null`, `"job"`, `"{a=\"b\"} or {c=\"d\"}"`, `"{a=\"b\"} |= \"x\""`, `"{a=\"b\""`, `[]`, `["{a=\"b\"}", "job"]`, `["{a=\"b\"}", ""]`} {
 		if _, err := l.ParseScope(json.RawMessage(bad)); err == nil {
 			t.Errorf("accepted %s", bad)
 		}
@@ -21,7 +25,7 @@ func TestParseScope(t *testing.T) {
 
 func TestCheckScope(t *testing.T) {
 	l := &Loki{}
-	scope, err := l.ParseScope(json.RawMessage(`"{app=\"web\"}"`))
+	scope, err := l.ParseScope(json.RawMessage(`["{app=\"web\"}", "{app=\"api\"}"]`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,13 +42,15 @@ func TestCheckScope(t *testing.T) {
 		`sum by (pod) (rate({app="web"} |= "error" | json | unwrap duration_ms [5m] offset 5m)) / sum by (pod) (count_over_time({app="web"}[5m] offset 5m))`: true,
 		`sum(count_over_time({app="web"} != "debug" !~ "trace|info" [1h])) > 0.5 * 2 - 1`:                                                                    true,
 		`sum(rate({app="web"}[5m])) / sum(rate({app="other"}[5m]))`:                                                                                          false,
-		`{app="other"}`:          false,
-		`{app="web",env="prod"}`: false,
-		`{app=~"web|db"}`:        false,
-		`|= "x"`:                 false,
-		`{app="web"`:             false,
-		`{app="web"} |= "x`:      false,
-		``:                       false,
+		`{app="other"}`:      false,
+		`{app="api"} |= "x"`: true,
+		`sum(rate({app="web"}[5m])) / sum(rate({app="api"}[5m]))`: true,
+		`{app="web",env="prod"}`:                                  false,
+		`{app=~"web|db"}`:                                         false,
+		`|= "x"`:                                                  false,
+		`{app="web"`:                                              false,
+		`{app="web"} |= "x`:                                       false,
+		``:                                                        false,
 		"sum(count_over_time({app=\"web\"}[5m])) /* ` */ + sum(count_over_time({app=~\".+\"}[5m])) /* ` */": false,
 		"sum(count_over_time({app=\"web\"}[5m])) // `\n + sum(count_over_time({app=~\".+\"}[5m])) // `":     false,
 		`sum(count_over_time({app="web"}[5m])) / sum(count_over_time({app="web"} |= "a//b" [5m]))`:          true,
