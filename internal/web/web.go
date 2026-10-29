@@ -83,6 +83,8 @@ func (h *Web) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /tokens", h.tokens)
 	mux.HandleFunc("POST /tokens", h.createToken)
 	mux.HandleFunc("POST /tokens/{id}/revoke", h.revokeToken)
+	mux.HandleFunc("GET /tokens/{id}/edit", h.editToken)
+	mux.HandleFunc("POST /tokens/{id}", h.updateToken)
 	mux.HandleFunc("GET /activity", h.activity)
 	h.upstreamRoutes(mux)
 }
@@ -285,52 +287,135 @@ func (h *Web) createToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "malformed form", http.StatusBadRequest)
 		return
 	}
-	name, scope, expiry := strings.TrimSpace(r.PostForm.Get("name")), strings.TrimSpace(r.PostForm.Get("scope")), r.PostForm.Get("expiry")
-	picked := r.PostForm["tools"]
-	dryRun := r.PostForm.Get("dry_run") == "on"
-	form := map[string]any{"Name": name, "Scope": scope, "Expiry": expiry, "Tools": picked, "DryRun": dryRun, "MaxWrites": r.PostForm.Get("max_writes")}
-	maxWrites := 20
-	if v := strings.TrimSpace(r.PostForm.Get("max_writes")); v != "" {
-		n, err := strconv.Atoi(v)
-		if err != nil || n < 0 || n > 1000 {
-			form["Error"] = "Write limit must be a whole number from 0 (unlimited) to 1000."
-			h.renderTokens(w, r, u, form, http.StatusBadRequest)
-			return
-		}
-		maxWrites = n
-	}
-	native, proxied, err := h.toolRows(r.Context(), u, nil)
+	expiry := r.PostForm.Get("expiry")
+	n, form, problem, err := h.readTokenForm(r, u)
+	form["Expiry"] = expiry
 	if err != nil {
 		h.fail(w, err)
 		return
 	}
-	known := map[string]bool{}
-	for _, t := range append(native, proxied...) {
-		known[t.Name] = true
-	}
-	for _, t := range picked {
-		if !known[t] {
-			form["Error"] = "Unknown tool " + t + "."
-			h.renderTokens(w, r, u, form, http.StatusBadRequest)
-			return
+	if problem == "" {
+		var ok bool
+		if n.TTL, ok = expiries[expiry]; !ok {
+			problem = "Pick an expiry."
 		}
 	}
-	ttl, ok := expiries[expiry]
-	if !ok {
-		form["Error"] = "Pick an expiry."
+	if problem != "" {
+		form["Error"] = problem
 		h.renderTokens(w, r, u, form, http.StatusBadRequest)
 		return
 	}
-	token, err := h.Auth.CreatePersonalToken(r.Context(), u.ID, auth.NewToken{
-		Name: name, Tools: picked, Scope: []byte(scope), TTL: ttl, MaxWritesPerHour: maxWrites, DryRun: dryRun})
+	token, err := h.Auth.CreatePersonalToken(r.Context(), u.ID, n)
 	if err != nil {
 		form["Error"] = "Could not create the token: " + err.Error()
 		h.renderTokens(w, r, u, form, http.StatusBadRequest)
 		return
 	}
-	h.Log.Info("personal token created", "user", u.Email, "name", name, "tools", picked)
+	name := n.Name
+	h.Log.Info("personal token created", "user", u.Email, "name", name, "tools", n.Tools)
 	w.Header().Set("Cache-Control", "no-store")
 	render(w, http.StatusOK, "token_created", map[string]any{"Name": name, "Token": token, "MCPURL": h.PublicURL + "/mcp", "Email": u.Email})
+}
+
+// readTokenForm reads the fields the create and edit forms share. form echoes
+// them back to the page; problem, when set, says why they cannot be used.
+func (h *Web) readTokenForm(r *http.Request, u store.User) (n auth.NewToken, form map[string]any, problem string, err error) {
+	n = auth.NewToken{Name: strings.TrimSpace(r.PostForm.Get("name")), Tools: r.PostForm["tools"],
+		Scope: []byte(strings.TrimSpace(r.PostForm.Get("scope"))), MaxWritesPerHour: 20, DryRun: r.PostForm.Get("dry_run") == "on"}
+	form = map[string]any{"Name": n.Name, "Scope": string(n.Scope), "Tools": n.Tools, "DryRun": n.DryRun, "MaxWrites": r.PostForm.Get("max_writes")}
+	if v := strings.TrimSpace(r.PostForm.Get("max_writes")); v != "" {
+		m, err := strconv.Atoi(v)
+		if err != nil || m < 0 || m > 1000 {
+			return n, form, "Write limit must be a whole number from 0 (unlimited) to 1000.", nil
+		}
+		n.MaxWritesPerHour = m
+	}
+	native, proxied, err := h.toolRows(r.Context(), u, nil)
+	if err != nil {
+		return n, form, "", err
+	}
+	known := map[string]bool{}
+	for _, t := range append(native, proxied...) {
+		known[t.Name] = true
+	}
+	for _, t := range n.Tools {
+		if !known[t] {
+			return n, form, "Unknown tool " + t + ".", nil
+		}
+	}
+	return n, form, "", nil
+}
+
+func (h *Web) editToken(w http.ResponseWriter, r *http.Request) {
+	u, ok := h.Auth.WebUser(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	list, err := h.Auth.Store.ListPersonalTokens(r.Context(), u.ID)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	i := slices.IndexFunc(list, func(t store.PersonalToken) bool { return t.ID == r.PathValue("id") })
+	if i < 0 {
+		http.NotFound(w, r)
+		return
+	}
+	t := list[i]
+	h.renderEdit(w, r, u, t.ID, map[string]any{"Name": t.Name, "Scope": string(t.Scope), "Tools": t.Tools,
+		"DryRun": t.DryRun, "MaxWrites": strconv.Itoa(t.MaxWritesPerHour)}, http.StatusOK)
+}
+
+// renderEdit shows the edit form; form carries the token's fields and Error.
+func (h *Web) renderEdit(w http.ResponseWriter, r *http.Request, u store.User, id string, form map[string]any, status int) {
+	checked, _ := form["Tools"].([]string)
+	native, proxied, err := h.toolRows(r.Context(), u, checked)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	form["ID"], form["ToolRows"], form["ProxiedRows"], form["Email"] = id, native, proxied, u.Email
+	render(w, status, "token_edit", form)
+}
+
+func (h *Web) updateToken(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Origin") != h.PublicURL {
+		http.Error(w, "cross-origin request refused", http.StatusForbidden)
+		return
+	}
+	u, ok := h.Auth.WebUser(r)
+	if !ok {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "malformed form", http.StatusBadRequest)
+		return
+	}
+	id := r.PathValue("id")
+	n, form, problem, err := h.readTokenForm(r, u)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	if problem == "" {
+		err = h.Auth.UpdatePersonalToken(r.Context(), u.ID, id, n)
+		if errors.Is(err, store.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		if err != nil {
+			problem = "Could not save the token: " + err.Error()
+		}
+	}
+	if problem != "" {
+		form["Error"] = problem
+		h.renderEdit(w, r, u, id, form, http.StatusBadRequest)
+		return
+	}
+	h.Log.Info("personal token edited", "user", u.Email, "id", id, "name", n.Name, "tools", n.Tools)
+	http.Redirect(w, r, "/tokens", http.StatusSeeOther)
 }
 
 func (h *Web) revokeToken(w http.ResponseWriter, r *http.Request) {

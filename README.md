@@ -135,6 +135,8 @@ The form asks for:
 - **Write limit per hour.** How many calls that change things the token may make in an hour. The default is 20. Use 0 for no limit.
 - **Dry run.** Tools that change things report what they would do and never contact the upstream.
 
+**Edit** on `/tokens` changes all of these but the expiry. The token's value stays, and the change applies from its next call, so narrowing a scope or dropping a tool takes effect without handing the bot a new token.
+
 ### Scope keys
 
 | Key | Value | Example | A call is refused when |

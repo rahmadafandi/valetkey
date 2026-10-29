@@ -149,6 +149,7 @@
       · {{if .LastUsedAt}}last used {{.LastUsedAt.UTC.Format "2006-01-02 15:04"}} UTC{{else}}never used{{end}}
       · {{if .ExpiresAt}}expires {{.ExpiresAt.UTC.Format "2006-01-02"}}{{else}}no expiry{{end}}
       · {{if .DryRun}}dry run · {{end}}{{if .MaxWritesPerHour}}{{.MaxWritesPerHour}} writes/hour{{else}}no write limit{{end}}</span></span>
+      <a class="btn small" href="/tokens/{{.ID}}/edit" aria-label="Edit {{.Name}}">Edit</a>
       <form method="post" action="/tokens/{{.ID}}/revoke"><button class="btn small danger" type="submit" data-confirm="Revoke {{.Name}}? Anything using it stops working right away." aria-label="Revoke {{.Name}}">Revoke</button></form>
     </li>
   {{else}}
@@ -163,6 +164,21 @@
     <label for="name">Name</label>
     <p class="hint" id="name-hint">So you can tell your tokens apart, for example the bot's name.</p>
     <input id="name" name="name" value="{{.Name}}" placeholder="atlas" autocomplete="off" aria-describedby="name-hint">
+    {{template "token_fields" .}}
+    <label for="expiry">Expires</label>
+    <select id="expiry" name="expiry">
+      <option value="7" {{if eq .Expiry "7"}}selected{{end}}>in 7 days</option>
+      <option value="30" {{if eq .Expiry "30"}}selected{{end}}>in 30 days</option>
+      <option value="90" {{if eq .Expiry "90"}}selected{{end}}>in 90 days</option>
+      <option value="0" {{if eq .Expiry "0"}}selected{{end}}>never</option>
+    </select>
+    <div class="actions"><button class="btn primary" type="submit" data-busy="Creating…">Create token</button></div>
+  </form>
+  <p class="muted">Revoking a token does not affect your other clients.</p>
+</section>
+{{template "bottom"}}{{end}}
+
+{{define "token_fields"}}
     <fieldset>
       <legend>Tools it may use</legend>
       {{range .ToolRows}}
@@ -189,16 +205,20 @@
     <p class="hint" id="scope-hint">JSON that names what each tool family may reach. A family left out reaches nothing.</p>
     <textarea id="scope" name="scope" rows="4" class="mono" aria-describedby="scope-hint"
       placeholder='{"bitbucket":"acme/web","jenkins":["deploy-web"],"loki":"{app=\"web\"}"}'>{{.Scope}}</textarea>
-    <label for="expiry">Expires</label>
-    <select id="expiry" name="expiry">
-      <option value="7" {{if eq .Expiry "7"}}selected{{end}}>in 7 days</option>
-      <option value="30" {{if eq .Expiry "30"}}selected{{end}}>in 30 days</option>
-      <option value="90" {{if eq .Expiry "90"}}selected{{end}}>in 90 days</option>
-      <option value="0" {{if eq .Expiry "0"}}selected{{end}}>never</option>
-    </select>
-    <div class="actions"><button class="btn primary" type="submit" data-busy="Creating…">Create token</button></div>
+{{end}}
+
+{{define "token_edit"}}{{template "top" (page "Edit token" .Email "tokens")}}
+<h1>Edit {{.Name}}</h1>
+<p class="lead">Changes apply from the token's next call. Its value and expiry stay as they are, so nothing using it needs a new token.</p>
+<section class="card" aria-labelledby="edit-h">
+  <h2 id="edit-h" class="visually-hidden">Token settings</h2>
+  {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+  <form method="post" action="/tokens/{{.ID}}">
+    <label for="name">Name</label>
+    <input id="name" name="name" value="{{.Name}}" autocomplete="off">
+    {{template "token_fields" .}}
+    <div class="actions"><button class="btn primary" type="submit" data-busy="Saving…">Save changes</button> <a href="/tokens">Cancel</a></div>
   </form>
-  <p class="muted">Revoking a token does not affect your other clients.</p>
 </section>
 {{template "bottom"}}{{end}}
 

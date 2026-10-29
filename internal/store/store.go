@@ -335,6 +335,15 @@ func (s *Store) ListPersonalTokens(ctx context.Context, userID string) ([]Person
 	return list, err
 }
 
+// UpdatePersonalToken changes what one of the user's tokens may do: its name,
+// tools, scope, write limit and dry run. Its value and expiry stay. Other
+// users' tokens are untouched.
+func (s *Store) UpdatePersonalToken(ctx context.Context, t PersonalToken) error {
+	err := deleteOne(s.db.NewUpdate().Model(&t).Column("name", "tools", "scope", "max_writes_per_hour", "dry_run").
+		Where("user_id = ? AND id = ?", t.UserID, t.ID).Exec(ctx))
+	return notFound(err)
+}
+
 // DeletePersonalToken revokes one of the user's tokens; other users' tokens are untouched.
 func (s *Store) DeletePersonalToken(ctx context.Context, userID, id string) error {
 	err := deleteOne(s.db.NewDelete().Model((*PersonalToken)(nil)).Where("user_id = ? AND id = ?", userID, id).Exec(ctx))

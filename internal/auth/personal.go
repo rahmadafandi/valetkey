@@ -26,28 +26,48 @@ type NewToken struct {
 	DryRun           bool
 }
 
-// CreatePersonalToken stores a new token for userID and returns it; only its hash is kept.
-func (s *Server) CreatePersonalToken(ctx context.Context, userID string, n NewToken) (string, error) {
-	name, toolNames, scope, ttl := strings.TrimSpace(n.Name), n.Tools, n.Scope, n.TTL
+// personalToken checks what a token is given, as on create and on edit.
+func (s *Server) personalToken(userID string, n NewToken) (store.PersonalToken, error) {
+	name, scope := strings.TrimSpace(n.Name), n.Scope
 	if name == "" {
-		return "", errors.New("name is required")
+		return store.PersonalToken{}, errors.New("name is required")
 	}
-	if len(toolNames) == 0 {
-		return "", errors.New("pick at least one tool")
+	if len(n.Tools) == 0 {
+		return store.PersonalToken{}, errors.New("pick at least one tool")
 	}
 	if n.MaxWritesPerHour < 0 {
-		return "", errors.New("write limit cannot be negative")
+		return store.PersonalToken{}, errors.New("write limit cannot be negative")
 	}
 	if _, err := tools.ParseScope(s.Integrations, scope); err != nil {
-		return "", err
+		return store.PersonalToken{}, err
 	}
 	if len(strings.TrimSpace(string(scope))) == 0 {
 		scope = []byte("{}")
 	}
-	t := store.PersonalToken{UserID: userID, Name: name, Tools: toolNames, Scope: scope,
-		MaxWritesPerHour: n.MaxWritesPerHour, DryRun: n.DryRun}
-	if ttl > 0 {
-		exp := time.Now().Add(ttl)
+	return store.PersonalToken{UserID: userID, Name: name, Tools: n.Tools, Scope: scope,
+		MaxWritesPerHour: n.MaxWritesPerHour, DryRun: n.DryRun}, nil
+}
+
+// UpdatePersonalToken changes what one of the user's tokens may do; n.TTL is
+// ignored. Every call reads the token afresh, so the change applies from its
+// next call.
+func (s *Server) UpdatePersonalToken(ctx context.Context, userID, id string, n NewToken) error {
+	t, err := s.personalToken(userID, n)
+	if err != nil {
+		return err
+	}
+	t.ID = id
+	return s.Store.UpdatePersonalToken(ctx, t)
+}
+
+// CreatePersonalToken stores a new token for userID and returns it; only its hash is kept.
+func (s *Server) CreatePersonalToken(ctx context.Context, userID string, n NewToken) (string, error) {
+	t, err := s.personalToken(userID, n)
+	if err != nil {
+		return "", err
+	}
+	if n.TTL > 0 {
+		exp := time.Now().Add(n.TTL)
 		t.ExpiresAt = &exp
 	}
 	token := PersonalTokenPrefix + rand.Text() + rand.Text()

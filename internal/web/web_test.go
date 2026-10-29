@@ -238,6 +238,49 @@ func TestTokens(t *testing.T) {
 
 	list, _ := e.as.Store.ListPersonalTokens(ctx, e.user.ID)
 	list = slices.DeleteFunc(list, func(p store.PersonalToken) bool { return p.Name != "atlas" })
+	edit := "/tokens/" + list[0].ID
+	if code, body := e.get(t, edit+"/edit", true); code != 200 || !strings.Contains(body, `value="atlas"`) || !strings.Contains(body, `value="20"`) || !strings.Contains(body, "fake") {
+		t.Errorf("edit page: %d\n%s", code, body)
+	}
+	narrower := url.Values{"name": {"atlas-ro"}, "tools": {"loki_query"}, "scope": {`{}`}, "max_writes": {"3"}, "dry_run": {"on"}}
+	if code, _ := e.post(t, edit, narrower, "https://evil.example"); code != http.StatusForbidden {
+		t.Errorf("edit foreign Origin: %d", code)
+	}
+	for name, form := range map[string]url.Values{
+		"bad scope":    {"name": {"x"}, "tools": {"loki_query"}, "scope": {`{"jenkin":"x"}`}},
+		"unknown tool": {"name": {"x"}, "tools": {"rm_rf"}},
+		"no tools":     {"name": {"x"}},
+		"too many":     {"name": {"x"}, "tools": {"loki_query"}, "max_writes": {"1001"}},
+	} {
+		if code, body := e.post(t, edit, form, e.url); code != 400 || !strings.Contains(body, `class="error" role="alert"`) {
+			t.Errorf("edit %s: %d", name, code)
+		}
+	}
+	if ti, err := e.as.Verify(ctx, m[1], nil); err != nil || tools.RestrictionOf(ti).Name != "atlas" {
+		t.Fatalf("a rejected edit changed the token: %v", err)
+	}
+	if code, _ := e.post(t, edit, narrower, e.url); code != http.StatusSeeOther {
+		t.Errorf("edit: %d", code)
+	}
+	ti, err = e.as.Verify(ctx, m[1], nil)
+	if r := tools.RestrictionOf(ti); err != nil || r == nil || r.Name != "atlas-ro" || r.Allows("jenkins_deploy") || !r.Allows("loki_query") ||
+		len(r.Scope) != 0 || r.MaxWritesPerHour != 3 || !r.DryRun {
+		t.Fatalf("edited token: %+v %v", r, err)
+	}
+	other, _ := e.as.Store.UpsertUser(ctx, "someone@example.com")
+	if _, err := e.as.CreatePersonalToken(ctx, other.ID, auth.NewToken{Name: "theirs", Tools: []string{"loki_query"}}); err != nil {
+		t.Fatal(err)
+	}
+	theirs, _ := e.as.Store.ListPersonalTokens(ctx, other.ID)
+	if code, _ := e.get(t, "/tokens/"+theirs[0].ID+"/edit", true); code != http.StatusNotFound {
+		t.Errorf("edit page of another user's token: %d", code)
+	}
+	if code, _ := e.post(t, "/tokens/"+theirs[0].ID, narrower, e.url); code != http.StatusNotFound {
+		t.Errorf("edit another user's token: %d", code)
+	}
+	if theirs, _ = e.as.Store.ListPersonalTokens(ctx, other.ID); theirs[0].Name != "theirs" {
+		t.Errorf("another user's token changed: %+v", theirs[0])
+	}
 	if code, _ := e.post(t, "/tokens/"+list[0].ID+"/revoke", nil, "https://evil.example"); code != http.StatusForbidden {
 		t.Errorf("revoke foreign Origin: %d", code)
 	}
