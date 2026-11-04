@@ -462,6 +462,21 @@ func TestOAuthAuthorizationURL(t *testing.T) {
 	}
 }
 
+// Servers such as Metabase list no tools for a token without scopes, so the
+// sign-in asks for every scope the resource metadata names.
+func TestOAuthRequestsSupportedScopes(t *testing.T) {
+	e := newOAuthEnv(t, asOpts{}, false)
+	e.f.opts.Scopes = []string{"agent:search", "agent:sql:execute"}
+	authURL, err := e.p.StartOAuth(ctx, e.userID, e.u, "", "", "st")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, _ := url.Parse(authURL)
+	if got := u.Query().Get("scope"); got != "agent:search agent:sql:execute" {
+		t.Fatalf("scope = %q in %s", got, authURL)
+	}
+}
+
 func TestOAuthFinishAndCall(t *testing.T) {
 	e := newOAuthEnv(t, asOpts{}, true)
 	e.login(t)

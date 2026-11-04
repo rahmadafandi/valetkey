@@ -39,6 +39,8 @@ type fakeOpts struct {
 	Challenge bool
 	// Resource, given the MCP URL, is the metadata's resource value; nil means the MCP URL itself.
 	Resource func(mcpURL string) string
+	// Scopes is the metadata's scopes_supported.
+	Scopes []string
 }
 
 type fake struct {
@@ -75,7 +77,7 @@ func newFake(t *testing.T, opts fakeOpts) *fake {
 				if opts.Resource != nil {
 					resource = opts.Resource(f.URL)
 				}
-				json.NewEncoder(w).Encode(map[string]any{"resource": resource, "authorization_servers": []string{opts.AuthServer}})
+				json.NewEncoder(w).Encode(map[string]any{"resource": resource, "authorization_servers": []string{opts.AuthServer}, "scopes_supported": f.opts.Scopes})
 				return
 			}
 		}

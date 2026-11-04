@@ -43,7 +43,7 @@ const refreshMargin = 30 * time.Second
 // clientID is empty, stores a pending credential holding the PKCE verifier and
 // client, and returns the URL to send the user's browser to.
 func (p *Proxy) StartOAuth(ctx context.Context, userID string, u store.Upstream, clientID, clientSecret, state string) (string, error) {
-	as, err := p.discover(ctx, u)
+	as, scopes, err := p.discover(ctx, u)
 	if err != nil {
 		return "", fmt.Errorf("%s: %w", u.Name, err)
 	}
@@ -83,6 +83,9 @@ func (p *Proxy) StartOAuth(ctx context.Context, userID string, u store.Upstream,
 	}
 	cfg := oauthConfig(c)
 	cfg.Endpoint.AuthURL = as.AuthorizationEndpoint
+	// Servers such as Metabase list no tools for a token without scopes.
+	// ponytail: asks for every scopes_supported; honour a WWW-Authenticate scope when a server sends one.
+	cfg.Scopes = scopes
 	return cfg.AuthCodeURL(state, oauth2.S256ChallengeOption(verifier), oauth2.SetAuthURLParam("resource", u.URL)), nil
 }
 
@@ -160,11 +163,12 @@ func tokenAuth(secret string, supported []string) string {
 }
 
 // discover follows the upstream's protected-resource metadata to its
-// authorization server's metadata. Every fetch goes through the guard.
-func (p *Proxy) discover(ctx context.Context, u store.Upstream) (*oauthex.AuthServerMeta, error) {
+// authorization server's metadata, and returns the scopes the resource
+// supports. Every fetch goes through the guard.
+func (p *Proxy) discover(ctx context.Context, u store.Upstream) (*oauthex.AuthServerMeta, []string, error) {
 	endpoint, err := p.Guard.CheckURL(u.URL)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	locations := wellKnown(endpoint, "oauth-protected-resource", false)
 	if m := p.resourceMetadataURL(ctx, u.URL); m != "" {
@@ -172,30 +176,30 @@ func (p *Proxy) discover(ctx context.Context, u store.Upstream) (*oauthex.AuthSe
 	}
 	var prm oauthex.ProtectedResourceMetadata
 	if err := p.firstJSON(ctx, locations, &prm); err != nil {
-		return nil, fmt.Errorf("protected-resource metadata: %w", err)
+		return nil, nil, fmt.Errorf("protected-resource metadata: %w", err)
 	}
 	if !resourceMatches(prm.Resource, endpoint) {
-		return nil, fmt.Errorf("protected-resource metadata is for %q, not this server", prm.Resource)
+		return nil, nil, fmt.Errorf("protected-resource metadata is for %q, not this server", prm.Resource)
 	}
 	if len(prm.AuthorizationServers) == 0 {
-		return nil, errors.New("protected-resource metadata names no authorization server")
+		return nil, nil, errors.New("protected-resource metadata names no authorization server")
 	}
 	issuer, err := p.Guard.CheckURL(prm.AuthorizationServers[0])
 	if err != nil {
-		return nil, fmt.Errorf("authorization server: %w", err)
+		return nil, nil, fmt.Errorf("authorization server: %w", err)
 	}
 	var as oauthex.AuthServerMeta
 	if err := p.firstJSON(ctx, wellKnown(issuer, "oauth-authorization-server", true), &as); err != nil {
-		return nil, fmt.Errorf("authorization server metadata: %w", err)
+		return nil, nil, fmt.Errorf("authorization server metadata: %w", err)
 	}
 	if strings.TrimSuffix(as.Issuer, "/") != strings.TrimSuffix(prm.AuthorizationServers[0], "/") {
-		return nil, fmt.Errorf("authorization server metadata names issuer %q, not %q", as.Issuer, prm.AuthorizationServers[0])
+		return nil, nil, fmt.Errorf("authorization server metadata names issuer %q, not %q", as.Issuer, prm.AuthorizationServers[0])
 	}
 	if !slices.Contains(as.CodeChallengeMethodsSupported, "S256") {
-		return nil, errors.New("the authorization server does not support PKCE with S256")
+		return nil, nil, errors.New("the authorization server does not support PKCE with S256")
 	}
 	if as.AuthorizationEndpoint == "" || as.TokenEndpoint == "" {
-		return nil, errors.New("authorization server metadata lacks an authorization or token endpoint")
+		return nil, nil, errors.New("authorization server metadata lacks an authorization or token endpoint")
 	}
 	// The authorization endpoint is only a browser redirect; the others are fetched, and the guard checks them again when dialing.
 	for name, raw := range map[string]string{"authorization_endpoint": as.AuthorizationEndpoint, "token_endpoint": as.TokenEndpoint, "registration_endpoint": as.RegistrationEndpoint} {
@@ -203,10 +207,10 @@ func (p *Proxy) discover(ctx context.Context, u store.Upstream) (*oauthex.AuthSe
 			continue
 		}
 		if _, err := p.Guard.CheckURL(raw); err != nil {
-			return nil, fmt.Errorf("%s: %w", name, err)
+			return nil, nil, fmt.Errorf("%s: %w", name, err)
 		}
 	}
-	return &as, nil
+	return &as, prm.ScopesSupported, nil
 }
 
 // resourceMatches checks the metadata's resource value, which RFC 9728 section
