@@ -88,7 +88,9 @@ func TestAbsoluteRangeInLocalTime(t *testing.T) {
 	zone := time.FixedZone("UTC+7", 7*60*60)
 	old := time.Local
 	time.Local = zone
-	defer func() { time.Local = old }()
+	// Cleanups run last-in first-out, so this restores time.Local only after
+	// setup's test server has closed and no handler can still be reading it.
+	t.Cleanup(func() { time.Local = old })
 
 	l, got := setup(t)
 	// end before start: the range is swapped, not rejected.
