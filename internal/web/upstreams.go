@@ -451,6 +451,7 @@ type reviewRow struct {
 	SchemaText string
 	Added      bool
 	Changed    string
+	NowWrites  []string    // tokens that already grant a tool which now changes things
 	LosesLimit []lostLimit // tokens whose scope would stop limiting this tool
 }
 
@@ -541,7 +542,9 @@ func (h *Web) renderReview(w http.ResponseWriter, r *http.Request, u store.User,
 		added[n] = true
 	}
 	changed := map[string]string{}
+	nowWrites := map[string]bool{}
 	for _, c := range diff.Changed {
+		nowWrites[c.Name] = c.Writes
 		var parts []string
 		if c.Description {
 			parts = append(parts, "description")
@@ -553,6 +556,23 @@ func (h *Web) renderReview(w http.ResponseWriter, r *http.Request, u store.User,
 			parts = append(parts, "whether it changes things")
 		}
 		changed[c.Name] = strings.Join(parts, ", ")
+	}
+	// A token keeps its grant of a changed tool, so name the tokens a newly writing tool reaches.
+	grants := map[string][]string{}
+	if len(nowWrites) > 0 {
+		tokens, err := h.Auth.Store.ListPersonalTokens(r.Context(), u.ID)
+		if err != nil {
+			h.fail(w, err)
+			return
+		}
+		for _, t := range tokens {
+			for _, name := range t.Tools {
+				grants[name] = append(grants[name], t.Name)
+			}
+		}
+		for _, names := range grants {
+			slices.Sort(names)
+		}
 	}
 	escapes, _, err := h.escaping(r.Context(), u, up, cands)
 	if err != nil {
@@ -566,6 +586,9 @@ func (h *Web) renderReview(w http.ResponseWriter, r *http.Request, u store.User,
 			pretty.Write(c.Schema)
 		}
 		rows[i] = reviewRow{Candidate: c, SchemaText: pretty.String(), Added: added[c.Name], Changed: changed[c.Name], LosesLimit: escapes[c.Prefixed]}
+		if nowWrites[c.Name] && c.Writes {
+			rows[i].NowWrites = grants[c.Prefixed]
+		}
 	}
 	data["Tools"] = rows
 	render(w, status, "review", data)

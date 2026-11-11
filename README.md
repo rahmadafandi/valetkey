@@ -107,7 +107,7 @@ valetkey keeps at most 200 tools per server, and you can add at most 20 servers.
 
 ### What a token can limit
 
-A token lists proxied tools by name, in their own group on the token form. A token without a tool cannot see or call it. A proxied tool counts as one that changes things when the server sets `destructiveHint: true` or does not set `readOnlyHint: true`. So the write limit and dry run apply to proxied tools. valetkey cannot know what the arguments of a tool you added mean, so it limits them only by value. On the token form, under a server, pick an argument such as `database_id` and list the values allowed for it. Nested arguments appear by dotted path, such as `query.database_id`. The rules:
+A token lists proxied tools by name, in their own group on the token form. A token without a tool cannot see or call it. A proxied tool counts as one that changes things when the server sets `destructiveHint: true` or does not set `readOnlyHint: true`. So the write limit and dry run apply to proxied tools. When a review finds that a tool you approved as read-only now changes things, it names the tokens that can already call it; approving keeps them able to. valetkey cannot know what the arguments of a tool you added mean, so it limits them only by value. On the token form, under a server, pick an argument such as `database_id` and list the values allowed for it. Nested arguments appear by dotted path, such as `query.database_id`. The rules:
 
 - Every listed argument a call sends must hold an allowed value, whichever tool of that server it calls. `5` and `"5"` count as the same value.
 - A tool whose schema has a listed argument must be sent at least one of them. With several rows, any one of them is enough.

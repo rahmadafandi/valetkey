@@ -510,6 +510,7 @@
     <li class="call">
       <div><code>{{.Prefixed}}</code> {{if .Writes}}<span class="writes">changes things</span>{{else}}<span class="reads">reads only</span>{{end}}
         {{if .Added}}<span class="diff added">New</span>{{end}}{{if .Changed}}<span class="diff changed">Changed: {{.Changed}}</span>{{end}}</div>
+      {{if .NowWrites}}<p class="error" role="alert">Now changes things, and these tokens can already call it: {{range $i, $n := .NowWrites}}{{if $i}}, {{end}}<strong>{{$n}}</strong>{{end}}. Approving keeps them able to.</p>{{end}}
       {{if .LosesLimit}}<p class="error" role="alert">{{range .LosesLimit}}Token <strong>{{.Token}}</strong> limits <code>{{.Tool}}</code> by <code>{{.Paths}}</code>, which this tool no longer has. {{end}}Approving removes the tool from these tokens.</p>{{end}}
       {{if .Description}}<div class="desc">{{.Description}}</div>{{else}}<p class="meta">No description.</p>{{end}}
       <details><summary>Input schema</summary><pre>{{.SchemaText}}</pre></details>

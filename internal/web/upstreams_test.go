@@ -766,3 +766,30 @@ func TestReviewRevokesToolsThatLoseTheirLimit(t *testing.T) {
 		t.Errorf("after approval: %v", got)
 	}
 }
+
+func TestReviewWarnsTokensOfToolsThatNowWrite(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	f := newMCPFake(t, &mcpFake{})
+	f.set(tool("search", "Finds notes.", true), tool("list", "Lists notes.", true))
+	id, body := e.addNone(t, "notes", f.URL)
+	e.do(t, "POST", "/upstreams/"+id+"/approve", url.Values{"digest": {digestOf(t, body)}}, e.cookie)
+	for _, name := range []string{"ci", "nightly"} {
+		if _, err := e.as.CreatePersonalToken(ctx, e.user.ID, auth.NewToken{Name: name, Tools: []string{"notes__search"}, TTL: time.Hour}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := e.as.CreatePersonalToken(ctx, e.user.ID, auth.NewToken{Name: "reader", Tools: []string{"notes__list"}, TTL: time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+
+	f.set(tool("search", "Finds notes.", false), tool("list", "Lists notes.", true))
+	_, body = e.do(t, "POST", "/upstreams/"+id+"/refresh", nil, e.cookie)
+	want := "Now changes things, and these tokens can already call it: <strong>ci</strong>, <strong>nightly</strong>. Approving keeps them able to."
+	if !strings.Contains(body, want) {
+		t.Errorf("review misses the warning %q:\n%s", want, body)
+	}
+	if strings.Contains(body, "<strong>reader</strong>") {
+		t.Error("a token of an unchanged tool is named")
+	}
+}
