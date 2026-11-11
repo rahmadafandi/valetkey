@@ -6,7 +6,7 @@ valetkey is a self-hosted MCP server that lets AI agents do operations work (ope
 
 A token does not only name the tools an agent may call. It names the resources those tools may reach: this repository, these Jenkins jobs, that log stream. Write tools refuse to act on stale state and hand back something to wait on. Each token has a write limit per hour and an optional dry run, and every call to a tool on the token's list is logged, refused ones included.
 
-valetkey is not a general MCP gateway. It can put the remote MCP servers each person adds behind the same front door (see [Your own MCP servers](#your-own-mcp-servers)), but those tools get no resource scope. If you want a gateway with policy for many MCP servers, [Obot](https://github.com/obot-platform/obot), [Bifrost](https://github.com/maximhq/bifrost) and [IBM ContextForge](https://github.com/IBM/mcp-context-forge) do that. Choose valetkey when your concern is what an agent can reach and change in Jenkins, Argo CD, Loki, Prometheus, Bitbucket Cloud and Notion, and you want that written down per token.
+valetkey is not a general MCP gateway. It can put the remote MCP servers each person adds behind the same front door (see [Your own MCP servers](#your-own-mcp-servers)), but it can only limit those tools by the values of their arguments. If you want a gateway with policy for many MCP servers, [Obot](https://github.com/obot-platform/obot), [Bifrost](https://github.com/maximhq/bifrost) and [IBM ContextForge](https://github.com/IBM/mcp-context-forge) do that. Choose valetkey when your concern is what an agent can reach and change in Jenkins, Argo CD, Loki, Prometheus, Bitbucket Cloud and Notion, and you want that written down per token.
 
 ## Quickstart
 
@@ -92,10 +92,10 @@ Each person can put remote MCP servers of their own behind valetkey, next to the
 Add a server with a name, its URL and a login kind:
 
 - **Token.** A header name (`Authorization` by default) and its value. valetkey stores the value only after it has fetched the server's tools with it.
-- **OAuth.** valetkey signs in to the server the way an MCP client does. It finds the server's authorization server from the `WWW-Authenticate` header of the 401 answer, or from the well-known address, and it needs `S256` in `code_challenge_methods_supported`, so it refuses a server without it. If the server offers dynamic client registration, valetkey registers itself. If not, the page asks for a client ID, and a secret if the client has one, and names the token endpoint's host, the only place the secret is sent. valetkey uses PKCE and sends `resource` with the authorization, token and refresh requests. It requests no `scope` yet, so a server that insists on scopes may not work. To sign in again, use **Sign in again** on the server's page: the old login keeps working until the new one finishes.
+- **OAuth.** valetkey signs in to the server the way an MCP client does. It finds the server's authorization server from the `WWW-Authenticate` header of the 401 answer, or from the well-known address, and it needs `S256` in `code_challenge_methods_supported`, so it refuses a server without it. If the server offers dynamic client registration, valetkey registers itself. If not, the page asks for a client ID, and a secret if the client has one, and names the token endpoint's host, the only place the secret is sent. valetkey uses PKCE and sends `resource` with the authorization, token and refresh requests. It requests the scopes the server lists in its protected-resource metadata. To sign in again, use **Sign in again** on the server's page: the old login keeps working until the new one finishes.
 - **None.** For a server that needs no login.
 
-The name starts with a lowercase letter or digit, followed by up to 23 lowercase letters, digits or hyphens. Agents see each tool as `<server>__<tool>`, so a tool `search` on a server named `docs` appears as `docs__search`.
+The name starts with a lowercase letter or digit, followed by up to 23 lowercase letters, digits or hyphens. It cannot be a built-in scope key (`argocd`, `bitbucket`, `jenkins`, `loki`, `metrics`, `notion`). Agents see each tool as `<server>__<tool>`, so a tool `search` on a server named `docs` appears as `docs__search`.
 
 ### Approving tools
 
@@ -107,7 +107,15 @@ valetkey keeps at most 200 tools per server, and you can add at most 20 servers.
 
 ### What a token can limit
 
-A token lists proxied tools by name, in their own group on the token form. A token without a tool cannot see or call it. A proxied tool counts as one that changes things when the server sets `destructiveHint: true` or does not set `readOnlyHint: true`. So the write limit and dry run apply to proxied tools. There is no scope for them: valetkey cannot know what the arguments of a tool you added mean, so it cannot limit which resources they reach.
+A token lists proxied tools by name, in their own group on the token form. A token without a tool cannot see or call it. A proxied tool counts as one that changes things when the server sets `destructiveHint: true` or does not set `readOnlyHint: true`. So the write limit and dry run apply to proxied tools. valetkey cannot know what the arguments of a tool you added mean, so it limits them only by value. On the token form, under a server, pick an argument such as `database_id` and list the values allowed for it. Nested arguments appear by dotted path, such as `query.database_id`. The rules:
+
+- Every listed argument a call sends must hold an allowed value, whichever tool of that server it calls. `5` and `"5"` count as the same value.
+- A tool whose schema has a listed argument must be sent at least one of them. With several rows, any one of them is enough.
+- A tool of that server whose schema has none of the listed arguments is not limited. The form marks each tool as limited or not.
+- A call is refused when a listed argument sits under a value that is not an object, or when a key differs from a listed argument only in case.
+- The server receives the arguments exactly as they were checked.
+
+When a re-approval would take away every argument a token limits a tool by, the review page names the token, and approving removes that tool from it, so a schema change never quietly lifts a limit.
 
 Token grants are by name. If you remove a server and add another with the same name, a token that listed `name__tool` applies to the new server's tool of that name. Check your tokens after you replace a server.
 
@@ -132,7 +140,7 @@ OAuth sign-in suits a person at a keyboard, and an OAuth session is not scoped. 
 The form asks for:
 
 - **Tools.** The tools the token may see and call. Tools that change things are marked.
-- **Scope.** A JSON object that says what each tool family may reach. A family you leave out reaches nothing, and a call to it is refused.
+- **Scope.** What each tool family may reach, one value per line. A family you leave empty reaches nothing, and a call to it is refused. Tools of your own MCP servers are limited by argument instead (see [What a token can limit](#what-a-token-can-limit)).
 - **Expiry.** 7, 30 or 90 days, or never.
 - **Write limit per hour.** How many calls that change things the token may make in an hour. The default is 20. Use 0 for no limit.
 - **Dry run.** Tools that change things report what they would do and never contact the upstream.
@@ -140,6 +148,8 @@ The form asks for:
 **Edit** on `/tokens` changes all of these but the expiry. The token's value stays, and the change applies from its next call, so narrowing a scope or dropping a tool takes effect without handing the bot a new token.
 
 ### Scope keys
+
+The form stores the scope as a JSON object with these keys. Each of your own servers that you limit adds a key with its name, holding an object of argument to allowed values, such as `"metabase": {"database_id": ["5", "7"]}`.
 
 | Key | Value | Example | A call is refused when |
 |---|---|---|---|
@@ -162,7 +172,7 @@ A whole scope for a token that deploys one service looks like this:
 }
 ```
 
-A key must belong to an upstream you have turned on, and a mistyped key is refused when you create the token. If you later turn that upstream off, the token stops working: `/mcp` answers 401 and the server log names the token id.
+A built-in key must belong to an upstream you have turned on. If you later turn that upstream off, the token stops working: `/mcp` answers 401 and the server log names the token id.
 
 ### Write limit and dry run
 
