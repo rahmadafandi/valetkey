@@ -157,7 +157,7 @@ func integrations(cfg config.Config) ([]tools.Integration, error) {
 		ints = append(ints, j)
 	}
 	if u, ok := cfg.Upstreams["argocd"]; ok {
-		ints = append(ints, argocd.New(u.URL, u.Insecure))
+		ints = append(ints, argocd.New(u.URL, u.Insecure, cfg.SessionKey))
 	}
 	if u, ok := cfg.Upstreams["loki"]; ok {
 		ints = append(ints, loki.New(u.URL, u.Insecure))

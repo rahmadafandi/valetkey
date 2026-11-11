@@ -3,15 +3,16 @@ package argocd
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"html"
 	"io"
 	"net/http"
-	"net/http/cookiejar"
 	"net/url"
-	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -24,10 +25,15 @@ type ArgoCD struct {
 	base      string
 	client    *http.Client
 	pollEvery time.Duration
+	key       []byte // derives each sign-in link's PKCE verifier from its state
 }
 
-func New(baseURL string, insecure bool) *ArgoCD {
-	return &ArgoCD{base: strings.TrimRight(baseURL, "/"), client: upstream.Client(insecure), pollEvery: 10 * time.Second}
+// key is a server secret; New derives its own key from it, so it is never used
+// for anything else.
+func New(baseURL string, insecure bool, key []byte) *ArgoCD {
+	m := hmac.New(sha256.New, key)
+	m.Write([]byte("valetkey argocd pkce"))
+	return &ArgoCD{base: strings.TrimRight(baseURL, "/"), client: upstream.Client(insecure), pollEvery: 10 * time.Second, key: m.Sum(nil)}
 }
 
 func (a *ArgoCD) System() string { return "argocd" }
@@ -35,20 +41,89 @@ func (a *ArgoCD) Title() string  { return "ArgoCD" }
 
 func (a *ArgoCD) Fields() []tools.Field {
 	return []tools.Field{
-		{Name: "token", Label: "API token (or leave empty and use username + password)", Secret: true, Optional: true},
-		{Name: "username", Label: "Username (LDAP)", Optional: true},
-		{Name: "password", Label: "Password", Secret: true, Optional: true},
+		{Name: "callback", Label: "The address you land on after signing in (http://localhost:8085/auth/callback?code=…)", Optional: true},
+		{Name: "token", Label: "Or an API token", Secret: true, Optional: true},
 	}
 }
 
 func (a *ArgoCD) Help() []string {
 	return []string{
-		"Easiest: leave the token empty and enter the username and password you use on " + a.base + " (the LDAP login button).",
-		"Or, if your account may create tokens: in " + a.base + " open User Info, then generate a token, and paste it as the API token.",
+		"Click Sign in to ArgoCD. If your browser is already signed in to the SSO behind ArgoCD, it goes straight through.",
+		"You land on a page at http://localhost:8085 that does not load. That is expected: copy the whole address from the address bar and paste it above. The sign-in lasts about a day; connect again when ArgoCD asks.",
+		"Or, if you have a token that does not expire (a project role token, or a local account's API token on " + a.base + "), paste it as the API token.",
 	}
 }
+
+// The ArgoCD CLI's Dex client: public, and only allowed to send the browser
+// back to localhost, which is why the user pastes the address they land on.
+const (
+	cliClient   = "argo-cd-cli"
+	cliRedirect = "http://localhost:8085/auth/callback"
+)
+
+// verifier is the PKCE verifier of the sign-in link with this state. Deriving
+// it keeps no state on the server and never shows the verifier to the browser.
+func (a *ArgoCD) verifier(state string) string {
+	m := hmac.New(sha256.New, a.key)
+	m.Write([]byte(state))
+	return base64.RawURLEncoding.EncodeToString(m.Sum(nil))
+}
+
+// SignInURL starts the ArgoCD SSO login, as `argocd login --sso` does.
+func (a *ArgoCD) SignInURL() string {
+	state := rand.Text()
+	sum := sha256.Sum256([]byte(a.verifier(state)))
+	q := url.Values{
+		"client_id": {cliClient}, "redirect_uri": {cliRedirect}, "response_type": {"code"},
+		"scope": {"openid profile email groups offline_access"}, "state": {state},
+		"code_challenge": {base64.RawURLEncoding.EncodeToString(sum[:])}, "code_challenge_method": {"S256"},
+	}
+	return a.base + "/api/dex/auth?" + q.Encode()
+}
+
+// Exchange turns a pasted sign-in address into an ArgoCD token. An API token
+// is kept as it is.
+// ponytail: stores only the ID token, which lasts about a day; Dex here cannot refresh it.
+func (a *ArgoCD) Exchange(ctx context.Context, c tools.Creds) (tools.Creds, error) {
+	pasted := strings.TrimSpace(c["callback"])
+	if pasted == "" {
+		return tools.Creds{"token": c["token"]}, nil
+	}
+	u, err := url.Parse(pasted)
+	if err != nil {
+		return nil, errors.New("paste the whole address you landed on")
+	}
+	q := u.Query()
+	if e := q.Get("error"); e != "" {
+		return nil, fmt.Errorf("ArgoCD said %s", e)
+	}
+	code, state := q.Get("code"), q.Get("state")
+	if code == "" || state == "" {
+		return nil, errors.New("that address has no sign-in code; paste the whole address you landed on")
+	}
+	form := url.Values{"grant_type": {"authorization_code"}, "code": {code}, "redirect_uri": {cliRedirect},
+		"client_id": {cliClient}, "code_verifier": {a.verifier(state)}}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, a.base+"/api/dex/token", strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	resp, err := a.client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	var tok struct {
+		IDToken string `json:"id_token"`
+	}
+	if resp.StatusCode != http.StatusOK || json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&tok) != nil || tok.IDToken == "" {
+		return nil, fmt.Errorf("ArgoCD refused the sign-in code (HTTP %d); it works once and expires quickly, so sign in again and paste the new address", resp.StatusCode)
+	}
+	return tools.Creds{"token": tok.IDToken}, nil
+}
+
 func (a *ArgoCD) Validate(ctx context.Context, c tools.Creds) error {
-	tok, err := a.bearer(ctx, c)
+	tok, err := a.bearer(c)
 	if err != nil {
 		return err
 	}
@@ -65,90 +140,13 @@ func (a *ArgoCD) Validate(ctx context.Context, c tools.Creds) error {
 	return nil
 }
 
-// bearer returns the API token, logging in through Dex when the user stored
-// username + password.
-// ponytail: logs in once per tool call; cache the session per user if Dex starts rate-limiting.
-func (a *ArgoCD) bearer(ctx context.Context, c tools.Creds) (string, error) {
-	if c["token"] != "" {
-		return c["token"], nil
+// bearer is the stored token. A login saved as username and password, from
+// before valetkey signed in through SSO, no longer works and asks for a new one.
+func (a *ArgoCD) bearer(c tools.Creds) (string, error) {
+	if c["token"] == "" {
+		return "", fmt.Errorf("argocd: sign in again on the connect page: %w", upstream.ErrUnauthorized)
 	}
-	if c["username"] == "" || c["password"] == "" {
-		return "", errors.New("argocd: set an API token, or username and password")
-	}
-	return a.dexLogin(ctx, c["username"], c["password"])
-}
-
-var formAction = regexp.MustCompile(`(?i)<form[^>]*action="([^"]+)"`)
-
-// dexLogin scripts the browser SSO flow: /auth/login lands on Dex's LDAP form,
-// and posting it makes ArgoCD set the argocd.token cookie.
-// ponytail: assumes a single Dex connector, so /auth/login goes straight to the form.
-func (a *ArgoCD) dexLogin(ctx context.Context, user, pass string) (string, error) {
-	base, err := url.Parse(a.base)
-	if err != nil {
-		return "", err
-	}
-	jar, _ := cookiejar.New(nil)
-	client := *a.client
-	client.Jar = jar
-	// The password must never leave the configured origin, so refuse any redirect that
-	// leaves it. Keep Go's default limit of 10 redirects.
-	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 10 {
-			return errors.New("argocd login: stopped after 10 redirects")
-		}
-		if !sameOrigin(req.URL, base) {
-			return fmt.Errorf("argocd login: refusing redirect to %s", req.URL.Host)
-		}
-		return nil
-	}
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, a.base+"/auth/login", nil)
-	if err != nil {
-		return "", err
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	resp.Body.Close()
-	m := formAction.FindSubmatch(body)
-	if m == nil {
-		return "", errors.New("argocd login: no login form found (single LDAP connector expected)")
-	}
-	action, err := resp.Request.URL.Parse(html.UnescapeString(string(m[1])))
-	if err != nil {
-		return "", err
-	}
-	if !sameOrigin(action, base) {
-		return "", fmt.Errorf("argocd login: refusing to send credentials to %s", action.Host)
-	}
-
-	form := url.Values{"login": {user}, "password": {pass}}
-	req, err = http.NewRequestWithContext(ctx, http.MethodPost, action.String(), strings.NewReader(form.Encode()))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	resp, err = client.Do(req)
-	if err != nil {
-		return "", err
-	}
-	io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-	resp.Body.Close()
-
-	for _, ck := range jar.Cookies(base) {
-		if ck.Name == "argocd.token" && ck.Value != "" {
-			return ck.Value, nil
-		}
-	}
-	return "", fmt.Errorf("argocd login failed, check username and password: %w", upstream.ErrUnauthorized)
-}
-
-// sameOrigin reports whether u has the same scheme and host as base.
-func sameOrigin(u, base *url.URL) bool {
-	return u.Scheme == base.Scheme && u.Host == base.Host
+	return c["token"], nil
 }
 
 func (a *ArgoCD) do(ctx context.Context, tok, method, path, body string) ([]byte, error) {
@@ -348,7 +346,7 @@ func (a *ArgoCD) Tools() []tools.Tool {
 		if err := tools.Args(raw, &x); err != nil {
 			return x, "", err
 		}
-		tok, err := a.bearer(ctx, c)
+		tok, err := a.bearer(c)
 		return x, tok, err
 	}
 	return []tools.Tool{

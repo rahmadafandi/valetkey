@@ -2,14 +2,16 @@ package argocd
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,9 +34,10 @@ func appJSON(sync, health, rev string, images ...string) string {
 
 type fakeArgo struct {
 	*httptest.Server
-	mu       sync.Mutex
-	statuses []string // returned in order; the last one repeats
-	synced   bool
+	mu        sync.Mutex
+	statuses  []string // returned in order; the last one repeats
+	synced    bool
+	challenge string // code_challenge of the sign-in link the test followed
 	syncs    int
 	syncBody string // body of the last sync POST
 }
@@ -71,18 +74,20 @@ func newFake(t *testing.T, statuses ...string) *fakeArgo {
 	mux.HandleFunc("GET /api/v1/session/userinfo", authed(func(w http.ResponseWriter, _ *http.Request) {
 		w.Write([]byte(`{"loggedIn":true,"username":"alice"}`))
 	}))
-	mux.HandleFunc("GET /auth/login", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/dex/auth/ldap?req=abc", http.StatusFound)
-	})
-	mux.HandleFunc("GET /dex/auth/ldap", func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte(`<html><form method="post" action="/dex/auth/ldap/login?back=&amp;state=abc"><input name="login"></form></html>`))
-	})
-	mux.HandleFunc("POST /dex/auth/ldap/login", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("POST /api/dex/token", func(w http.ResponseWriter, r *http.Request) {
 		r.ParseForm()
-		if r.URL.Query().Get("state") == "abc" && r.PostForm.Get("login") == "alice" && r.PostForm.Get("password") == "pw" {
-			http.SetCookie(w, &http.Cookie{Name: "argocd.token", Value: "tok", Path: "/"})
+		f.mu.Lock()
+		challenge := f.challenge
+		f.mu.Unlock()
+		sum := sha256.Sum256([]byte(r.PostForm.Get("code_verifier")))
+		if r.PostForm.Get("grant_type") != "authorization_code" || r.PostForm.Get("client_id") != "argo-cd-cli" ||
+			r.PostForm.Get("redirect_uri") != "http://localhost:8085/auth/callback" || r.PostForm.Get("code") != "c1" ||
+			base64.RawURLEncoding.EncodeToString(sum[:]) != challenge {
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"error":"invalid_grant"}`))
+			return
 		}
-		w.Write([]byte("done"))
+		w.Write([]byte(`{"id_token":"tok","access_token":"x","refresh_token":"r","token_type":"bearer","expires_in":86399}`))
 	})
 	f.Server = httptest.NewServer(mux)
 	t.Cleanup(f.Close)
@@ -91,7 +96,7 @@ func newFake(t *testing.T, statuses ...string) *fakeArgo {
 
 func setup(t *testing.T, statuses ...string) (*ArgoCD, *fakeArgo) {
 	f := newFake(t, statuses...)
-	a := New(f.URL, false)
+	a := New(f.URL, false, []byte("test-key-test-key-test-key-12345"))
 	a.pollEvery = time.Millisecond
 	return a, f
 }
@@ -122,16 +127,54 @@ func TestStatus(t *testing.T) {
 	}
 }
 
-func TestDexLogin(t *testing.T) {
+func TestSignInAndExchange(t *testing.T) {
+	a, f := setup(t, appJSON("Synced", "Healthy", "r1"))
+	link, err := url.Parse(a.SignInURL())
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := link.Query()
+	if link.Path != "/api/dex/auth" || q.Get("client_id") != "argo-cd-cli" || q.Get("redirect_uri") != "http://localhost:8085/auth/callback" ||
+		q.Get("code_challenge_method") != "S256" || q.Get("response_type") != "code" || !strings.Contains(q.Get("scope"), "openid") || q.Get("state") == "" {
+		t.Fatalf("sign-in link %s", link)
+	}
+	if again, _ := url.Parse(a.SignInURL()); again.Query().Get("state") == q.Get("state") {
+		t.Error("two sign-in links share a state")
+	}
+	f.mu.Lock()
+	f.challenge = q.Get("code_challenge")
+	f.mu.Unlock()
+	c, err := a.Exchange(ctx, tools.Creds{"callback": " http://localhost:8085/auth/callback?code=c1&state=" + q.Get("state") + " "})
+	if err != nil || len(c) != 1 || c["token"] != "tok" {
+		t.Fatalf("exchange = %v, %v", c, err)
+	}
+	if err := a.Validate(ctx, c); err != nil {
+		t.Errorf("exchanged token: %v", err)
+	}
+	// Another state derives another verifier, so a forged or reused link fails at Dex.
+	if _, err := a.Exchange(ctx, tools.Creds{"callback": "http://localhost:8085/auth/callback?code=c1&state=forged"}); err == nil || !strings.Contains(err.Error(), "sign in again") {
+		t.Errorf("forged state: %v", err)
+	}
+	if _, err := a.Exchange(ctx, tools.Creds{"callback": "http://localhost:8085/auth/callback?error=access_denied&state=x"}); err == nil || !strings.Contains(err.Error(), "access_denied") {
+		t.Errorf("denied sign-in: %v", err)
+	}
+	if _, err := a.Exchange(ctx, tools.Creds{"callback": "not a url at all"}); err == nil {
+		t.Error("a pasted value without a code was accepted")
+	}
+	if c, err := a.Exchange(ctx, tools.Creds{"token": "tok"}); err != nil || c["token"] != "tok" {
+		t.Errorf("an API token is kept as it is: %v, %v", c, err)
+	}
+}
+
+func TestPasswordLoginIsGone(t *testing.T) {
 	a, _ := setup(t, appJSON("Synced", "Healthy", "r1"))
-	if got, err := a.bearer(ctx, tools.Creds{"username": "alice", "password": "pw"}); err != nil || got != "tok" {
-		t.Fatalf("bearer = %q, %v", got, err)
+	for _, f := range a.Fields() {
+		if f.Name == "username" || f.Name == "password" {
+			t.Errorf("field %s is still offered", f.Name)
+		}
 	}
-	if _, err := a.bearer(ctx, tools.Creds{"username": "alice", "password": "wrong"}); !errors.Is(err, upstream.ErrUnauthorized) {
-		t.Errorf("wrong password: %v", err)
-	}
-	if _, err := a.bearer(ctx, tools.Creds{}); err == nil {
-		t.Error("empty creds accepted")
+	if err := a.Validate(ctx, tools.Creds{"username": "alice", "password": "pw"}); err == nil {
+		t.Error("a stored username and password still validate")
 	}
 }
 
@@ -202,58 +245,6 @@ func TestWatchToolLimits(t *testing.T) {
 	}
 	if got := watchMinutes(30); got != 5 {
 		t.Errorf("cap = %d", got)
-	}
-}
-
-// countingServer returns a server that counts every request it receives.
-func countingServer(t *testing.T) (*httptest.Server, *atomic.Int32) {
-	var hits atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		hits.Add(1)
-		w.Write([]byte(`<html><form method="post" action="/x"></form></html>`))
-	}))
-	t.Cleanup(srv.Close)
-	return srv, &hits
-}
-
-func TestDexLoginRefusesForeignFormAction(t *testing.T) {
-	foreign, hits := countingServer(t)
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /auth/login", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/dex/auth/ldap", http.StatusFound)
-	})
-	mux.HandleFunc("GET /dex/auth/ldap", func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte(`<html><form method="post" action="` + foreign.URL + `/steal"></form></html>`))
-	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-
-	a := New(srv.URL, false)
-	_, err := a.bearer(ctx, tools.Creds{"username": "alice", "password": "pw"})
-	if err == nil {
-		t.Fatal("login to a foreign form action succeeded")
-	}
-	if n := hits.Load(); n != 0 {
-		t.Errorf("foreign server received %d requests", n)
-	}
-}
-
-func TestDexLoginRefusesForeignRedirect(t *testing.T) {
-	foreign, hits := countingServer(t)
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /auth/login", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, foreign.URL+"/dex/auth/ldap", http.StatusFound)
-	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-
-	a := New(srv.URL, false)
-	_, err := a.bearer(ctx, tools.Creds{"username": "alice", "password": "pw"})
-	if err == nil {
-		t.Fatal("login through a foreign redirect succeeded")
-	}
-	if n := hits.Load(); n != 0 {
-		t.Errorf("foreign server received %d requests", n)
 	}
 }
 

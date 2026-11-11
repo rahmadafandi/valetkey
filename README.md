@@ -72,6 +72,8 @@ An upstream is on when its `<SYSTEM>_URL` is set. Each person then connects thei
 
 **Notion.** Each person pastes a Notion personal access token, made at [notion.so/developers/tokens](https://www.notion.so/developers/tokens). It acts as that person and reaches every page they can open. Whether members may create one depends on the plan: on Free and by default on Business, only workspace owners can; on Plus everyone can; admins can widen it on Business and Enterprise. A token reaches one workspace, so the connect page takes up to three, one per workspace. Search looks in each and labels every result with its workspace; the other tools take an ID and use whichever token can open it. The tools search, read pages as markdown, query databases, create pages and add content to the end of a page. Nothing deletes, moves or edits existing content.
 
+**Argo CD.** Each person signs in through Argo CD's own SSO, the way `argocd login --sso` does. The connect page links to Argo CD's login with the CLI's Dex client. The browser lands on `http://localhost:8085/auth/callback?code=…`, which does not load, and the person pastes that address back. The login lasts about a day. An API token that does not expire, such as a project role token, can be pasted instead. A username and password are not accepted.
+
 Add `<SYSTEM>_INSECURE=true` to skip TLS verification for an endpoint with a self-signed certificate, for example `JENKINS_INSECURE=true`.
 
 **Loki.** `LOKI_URL` is the base of the Loki HTTP API. Use one of:
