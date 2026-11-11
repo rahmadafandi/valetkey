@@ -103,6 +103,8 @@ valetkey fetches the server's tool list and shows every tool with its full descr
 
 Servers change. **Check for changes** (on the server's page, or **Review tools** when nothing is approved yet) fetches the list again and shows what is new, changed or removed. Until you approve, your agents keep the list you approved before, with one exception: when a review finds that the server no longer lists a tool, valetkey drops that tool right away, since a call to it would fail.
 
+An argument that the server's schema marks as required but that also accepts `null` is shown to agents as optional, and when a call leaves it out valetkey sends `null`. Some servers, Metabase's among them, require every argument yet refuse a value for one that does not apply to the chosen action, so an agent made to fill each one would be refused.
+
 valetkey keeps at most 200 tools per server, and you can add at most 20 servers. A tool is skipped, and listed on the review page, when its input schema is not a JSON object schema or when its prefixed name is not 1 to 64 letters, digits, `_` or `-`. Tools that the MCP SDK drops for an invalid `x-mcp-header` annotation never appear.
 
 ### What a token can limit
