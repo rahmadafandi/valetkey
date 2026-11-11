@@ -295,7 +295,7 @@ func TestProxiedToolEndToEnd(t *testing.T) {
 	if code != 200 || !strings.Contains(page, "<code>github__echo</code>") || !strings.Contains(page, "token bot") {
 		t.Errorf("activity does not list the proxied call: %d", code)
 	}
-	if !strings.Contains(page, "<code>db__echo</code>") || strings.Contains(page, "lookup") || strings.Contains(page, ":53") {
+	if !strings.Contains(page, "<code>db__echo</code>") || strings.Contains(page, "lookup") || strings.Contains(page, "no such host") {
 		t.Errorf("activity shows the raw DNS error or lacks the failed call:\n%s", page)
 	}
 }
