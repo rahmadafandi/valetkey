@@ -64,6 +64,20 @@ func SetAuth(req *http.Request, c map[string]string) {
 	}
 }
 
+// LocalZone names the zone ParseTime reads naive times in, for tool
+// descriptions: "Asia/Jakarta (UTC+07:00)", or the offset alone when the zone
+// has no name.
+func LocalZone() string {
+	name, offset := time.Local.String(), "UTC"+time.Now().Format("-07:00")
+	switch name {
+	case "UTC":
+		return name
+	case "Local", "":
+		return offset
+	}
+	return name + " (" + offset + ")"
+}
+
 // ParseTime accepts RFC3339, or "YYYY-MM-DD[ HH:MM[:SS]]" (T also accepted) read
 // in time.Local. Set TZ to choose the zone; the image defaults to UTC.
 func ParseTime(s string) (time.Time, bool) {

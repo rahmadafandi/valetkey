@@ -179,11 +179,11 @@ func (l *Loki) Tools() []tools.Tool {
 		Name: "loki_query",
 		Description: "Query Loki logs with LogQL (read-only). Narrow with line filters: |= contains, != not-contains, |~ regex, !~ not-regex. " +
 			"Use sinceMinutes for a relative window, or start (+optional end) for a specific past window. " +
-			"Times without an offset are server local time (TZ). Example: {app=\"web\"} |= \"error\"",
+			"Times without an offset are read as " + upstream.LocalZone() + ". Example: {app=\"web\"} |= \"error\"",
 		Schema: tools.Object(map[string]any{
 			"query":        tools.Str("LogQL query, including any line filters"),
 			"sinceMinutes": tools.Int("look-back window in minutes from now (default 60; ignored when start is set)"),
-			"start":        tools.Str("absolute range start: 'YYYY-MM-DD HH:MM' (server local time, TZ) or RFC3339"),
+			"start":        tools.Str("absolute range start: 'YYYY-MM-DD HH:MM' (" + upstream.LocalZone() + ") or RFC3339"),
 			"end":          tools.Str("absolute range end (defaults to now when start is set)"),
 			"limit":        tools.Int("max lines (default 500, max 5000)"),
 		}, "query"),

@@ -248,10 +248,10 @@ func (m *Metrics) Tools() []tools.Tool {
 		Name: "metrics_query",
 		Description: "Run PromQL against Prometheus (e.g. pod/container CPU, memory, restarts). Instant query by default; " +
 			"set start (+optional end/step) for a range with first/min/max/last per series, ideal for before/after-deploy comparisons. " +
-			"cadvisor series need container!=\"\" to skip pod-sandbox rows; rate() windows should be >= 2m. Times without an offset are server local time (TZ).",
+			"cadvisor series need container!=\"\" to skip pod-sandbox rows; rate() windows should be >= 2m. Times without an offset are read as " + upstream.LocalZone() + ".",
 		Schema: tools.Object(map[string]any{
 			"query": tools.Str("PromQL query"),
-			"start": tools.Str("optional range start: 'YYYY-MM-DD HH:MM' (server local time, TZ) or RFC3339; omit for an instant query"),
+			"start": tools.Str("optional range start: 'YYYY-MM-DD HH:MM' (" + upstream.LocalZone() + ") or RFC3339; omit for an instant query"),
 			"end":   tools.Str("optional range end (defaults to now)"),
 			"step":  tools.Str("optional range step like '1m' (default about 60 points)"),
 		}, "query"),

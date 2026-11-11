@@ -80,3 +80,16 @@ func TestClientSendsUserAgent(t *testing.T) {
 		}
 	}
 }
+
+func TestLocalZone(t *testing.T) {
+	old := time.Local
+	t.Cleanup(func() { time.Local = old })
+	time.Local = time.FixedZone("Asia/Jakarta", 7*3600)
+	if got := LocalZone(); got != "Asia/Jakarta (UTC+07:00)" {
+		t.Errorf("named zone: %q", got)
+	}
+	time.Local = time.UTC
+	if got := LocalZone(); got != "UTC" {
+		t.Errorf("UTC: %q", got)
+	}
+}
