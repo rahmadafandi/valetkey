@@ -114,6 +114,7 @@
 <div class="card">
   {{if .Connected}}<p class="notice">Connected. To replace these credentials, fill in the form again.</p>{{end}}
   {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+  {{if .SignIn}}<p><a class="btn" href="{{.SignIn}}" target="_blank" rel="noopener">Sign in to {{.Title}}</a></p>{{end}}
   <form method="post" action="/connect/{{.System}}">
     {{range .Fields}}
     <label for="{{.Name}}">{{.Label}}{{if .Optional}} <span class="muted">(optional)</span>{{end}}</label>

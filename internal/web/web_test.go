@@ -42,6 +42,15 @@ func (fakeInt) Validate(_ context.Context, c tools.Creds) error {
 func (fakeInt) ScopeKey() string                              { return "fake" }
 func (fakeInt) ParseScope(raw json.RawMessage) (any, error)   { return tools.StringOrList(raw) }
 func (fakeInt) CheckScope(any, string, json.RawMessage) error { return nil }
+func (fakeInt) SignInURL() string { return "https://idp.test/start?x=1&y=2" }
+
+// Exchange stands in for a sign-in code: "swap" becomes the token the fake accepts.
+func (fakeInt) Exchange(_ context.Context, c tools.Creds) (tools.Creds, error) {
+	if c["token"] == "swap" {
+		return tools.Creds{"token": "good"}, nil
+	}
+	return c, nil
+}
 func (fakeInt) Tools() []tools.Tool {
 	return []tools.Tool{{Name: "loki_query", Description: "read logs"}, {Name: "jenkins_deploy", Description: "deploy", Destructive: true}}
 }
@@ -292,6 +301,19 @@ func TestTokens(t *testing.T) {
 	}
 	if code, _ := e.post(t, "/tokens/00000000-0000-0000-0000-000000000000/revoke", nil, e.url); code != http.StatusNotFound {
 		t.Errorf("revoke unknown: %d", code)
+	}
+}
+
+func TestConnectSignInAndExchange(t *testing.T) {
+	e := newEnv(t)
+	if _, body := e.get(t, "/connect/fake", true); !strings.Contains(body, `href="https://idp.test/start?x=1&amp;y=2"`) {
+		t.Errorf("connect page lacks the sign-in link:\n%s", body)
+	}
+	if code, _ := e.post(t, "/connect/fake", url.Values{"action": {"save"}, "token": {"swap"}}, e.url); code != http.StatusSeeOther {
+		t.Fatalf("save: %d", code)
+	}
+	if c, err := e.creds.Load(context.Background(), e.user.ID, "fake"); err != nil || c["token"] != "good" {
+		t.Errorf("stored %v, %v", c, err)
 	}
 }
 

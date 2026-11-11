@@ -155,9 +155,13 @@ func (h *Web) renderConnect(w http.ResponseWriter, r *http.Request, u store.User
 	if hp, ok := in.(tools.Helper); ok {
 		help = hp.Help()
 	}
+	signIn := ""
+	if si, ok := in.(tools.SignIn); ok {
+		signIn = si.SignInURL()
+	}
 	render(w, status, "connect", map[string]any{
 		"Title": in.Title(), "System": in.System(), "Fields": in.Fields(),
-		"Connected": connected[in.System()], "Error": errMsg, "Help": help, "Email": u.Email,
+		"Connected": connected[in.System()], "Error": errMsg, "Help": help, "SignIn": signIn, "Email": u.Email,
 	})
 }
 
@@ -201,6 +205,13 @@ func (h *Web) connectSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Second)
 	defer cancel()
+	if ex, ok := in.(tools.Exchanger); ok {
+		var err error
+		if c, err = ex.Exchange(ctx, c); err != nil {
+			h.renderConnect(w, r, u, in, "Could not sign in: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	if err := in.Validate(ctx, c); err != nil {
 		h.renderConnect(w, r, u, in, "Could not verify these credentials: "+err.Error(), http.StatusBadRequest)
 		return

@@ -54,6 +54,16 @@ type Integration interface {
 // user finds the values their credential form asks for.
 type Helper interface{ Help() []string }
 
+// SignIn is implemented by integrations whose connect page starts with a
+// sign-in link, such as an SSO login whose result the user pastes back.
+type SignIn interface{ SignInURL() string }
+
+// Exchanger is implemented by integrations that turn what the user submitted,
+// such as a pasted sign-in address, into the credentials to store.
+type Exchanger interface {
+	Exchange(ctx context.Context, c Creds) (Creds, error)
+}
+
 // Connector is implemented by integrations whose connect page is not /connect/<system>.
 type Connector interface{ ConnectURL(publicURL string) string }
 
