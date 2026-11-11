@@ -37,7 +37,7 @@ type Tool struct {
 	Schema      map[string]any
 	Destructive bool          // mutates the upstream; clients should confirm first
 	Timeout     time.Duration // 0 means DefaultTimeout
-	Unscoped    bool          // proxied tool: valetkey cannot read its arguments, so token scope does not apply
+	Unscoped    bool          // proxied tool: no Scoper covers it; a token limits it by its server's rows, when it has any
 	Run         func(ctx context.Context, c Creds, args json.RawMessage) (string, error)
 }
 
@@ -147,8 +147,11 @@ func handler(in Integration, t Tool, load LoadCreds, publicURL string, log *slog
 		case r != nil && !r.Allows(t.Name):
 			err = Refuse("%s: not allowed for this token", t.Name)
 		case r != nil:
-			if !t.Unscoped {
-				err = r.Scope.Check(in, t.Name, req.Params.Arguments)
+			args := req.Params.Arguments
+			if t.Unscoped {
+				args, err = r.Scope.CheckServer(in.Title(), t.Schema, args)
+			} else {
+				err = r.Scope.Check(in, t.Name, args)
 			}
 			if err == nil && t.Destructive && r.MaxWritesPerHour > 0 && audit != nil {
 				// Held until the call is recorded, so parallel writes cannot all pass the same count.
@@ -171,7 +174,7 @@ func handler(in Integration, t Tool, load LoadCreds, publicURL string, log *slog
 			case t.Destructive && r.DryRun:
 				out, dryRun = fmt.Sprintf("dry-run: would call %s with %s", t.Name, truncate(string(req.Params.Arguments), 1024)), true
 			case t.Unscoped:
-				out, err = run(ctx, in, t, load, userID, req.Params.Arguments, log)
+				out, err = run(ctx, in, t, load, userID, args, log)
 			default:
 				out, err = run(r.Scope.withScope(ctx, in), in, t, load, userID, req.Params.Arguments, log)
 			}

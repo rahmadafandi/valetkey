@@ -714,3 +714,53 @@ func TestUserToolsAreServedOnlyToTheirOwner(t *testing.T) {
 		t.Errorf("A's call: %q isErr=%v", text, isErr)
 	}
 }
+
+// ownServer stands in for a user's MCP server whose tool takes a database_id.
+type ownServer struct{ got *string }
+
+func (ownServer) System() string                        { return "upstream:mb" }
+func (ownServer) Title() string                         { return "metabase" }
+func (ownServer) Fields() []Field                       { return nil }
+func (ownServer) Validate(context.Context, Creds) error { return nil }
+func (o ownServer) Tools() []Tool {
+	return []Tool{{Name: "metabase__run", Unscoped: true,
+		Schema: Object(map[string]any{"database_id": Int("the database")}),
+		Run: func(_ context.Context, _ Creds, raw json.RawMessage) (string, error) {
+			*o.got = string(raw)
+			return "metabase ran", nil
+		}}}
+}
+
+func TestProxiedToolChecksServerScope(t *testing.T) {
+	var got string
+	in := ownServer{&got}
+	tl := in.Tools()[0]
+	a := &fakeAudit{}
+	callWith := func(scope Scope, args string) (string, bool) {
+		h := handler(in, tl, nil, "https://center.test", slog.New(slog.DiscardHandler), a)
+		res, err := h(context.Background(), &mcp.CallToolRequest{
+			Params: &mcp.CallToolParamsRaw{Name: tl.Name, Arguments: json.RawMessage(args)},
+			Extra: &mcp.RequestExtra{TokenInfo: &mcpauth.TokenInfo{UserID: "u1", Extra: map[string]any{
+				RestrictionKey: &Restriction{TokenID: "tok", Name: "bot", Tools: []string{tl.Name}, Scope: scope}}}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return res.Content[0].(*mcp.TextContent).Text, res.IsError
+	}
+	limited := Scope{"metabase": ServerRows{"database_id": {"5"}}}
+	if text, isErr := callWith(limited, `{"database_id":9}`); !isErr || !strings.HasPrefix(text, "refused: ") || got != "" {
+		t.Errorf("database 9: %q isErr=%v ran with %q", text, isErr, got)
+	}
+	if last := a.calls[len(a.calls)-1]; last.Outcome != "refused" {
+		t.Errorf("audit outcome = %q, want refused", last.Outcome)
+	}
+	// The upstream gets the checked arguments, not the caller's bytes.
+	if text, isErr := callWith(limited, `{"database_id":9,"database_id":5}`); isErr || text != "metabase ran" || got != `{"database_id":5}` {
+		t.Errorf("database 5: %q isErr=%v ran with %q", text, isErr, got)
+	}
+	// Another server's rows, or none, leave the tool alone.
+	if text, isErr := callWith(Scope{"other": ServerRows{"database_id": {"5"}}}, `{"database_id":9}`); isErr || text != "metabase ran" {
+		t.Errorf("no rows: %q isErr=%v", text, isErr)
+	}
+}
