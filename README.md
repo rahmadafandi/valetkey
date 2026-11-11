@@ -147,6 +147,10 @@ The form asks for:
 
 **Edit** on `/tokens` changes all of these but the expiry. The token's value stays, and the change applies from its next call, so narrowing a scope or dropping a tool takes effect without handing the bot a new token.
 
+**Renew**, on a token's edit page, sets a new expiry (7, 30 or 90 days from now, or never) and keeps the value, tools and scope, so the bot keeps its token. An expired token cannot be used, but it stays on `/tokens` for 30 days so it can still be renewed; after that it is deleted.
+
+**Duplicate** on `/tokens` opens the create form filled in with another token's name, tools, scope, write limit and dry run. The new token gets its own value, and the original keeps working until you revoke it.
+
 ### Scope keys
 
 The form stores the scope as a JSON object with these keys. Each of your own servers that you limit adds a key with its name, holding an object of argument to allowed values, such as `"metabase": {"database_id": ["5", "7"]}`.
