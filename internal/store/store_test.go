@@ -171,8 +171,45 @@ func TestPersonalTokens(t *testing.T) {
 	if err := s.DeleteExpired(ctx, time.Time{}); err != nil {
 		t.Fatal(err)
 	}
-	if list, _ := s.ListPersonalTokens(ctx, u.ID); len(list) != 0 {
-		t.Errorf("expired token not cleaned up: %d left", len(list))
+	if list, _ := s.ListPersonalTokens(ctx, u.ID); len(list) != 1 {
+		t.Errorf("a token expired within the grace period was deleted: %d left", len(list))
+	}
+}
+
+func TestRenewPersonalToken(t *testing.T) {
+	s := OpenTest(t)
+	u, _ := s.UpsertUser(ctx, "rahmad@example.com")
+	other, _ := s.UpsertUser(ctx, "bob@example.com")
+	past := time.Now().Add(-time.Hour)
+	ancient := time.Now().Add(-ExpiredTokenGrace - time.Hour)
+	id, _ := s.CreatePersonalToken(ctx, PersonalToken{UserID: u.ID, Name: "atlas", Tools: []string{"loki_query"}, Scope: []byte(`{"loki":"x"}`), ExpiresAt: &past}, []byte("h1"))
+	s.CreatePersonalToken(ctx, PersonalToken{UserID: u.ID, Name: "gone", Tools: []string{"loki_query"}, Scope: []byte(`{}`), ExpiresAt: &ancient}, []byte("h2"))
+
+	future := time.Now().Add(time.Hour)
+	if err := s.RenewPersonalToken(ctx, other.ID, id, &future); !errors.Is(err, ErrNotFound) {
+		t.Errorf("another user renewed it: %v", err)
+	}
+	if _, _, err := s.UsePersonalToken(ctx, []byte("h1")); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expired token works before renewal: %v", err)
+	}
+	if err := s.RenewPersonalToken(ctx, u.ID, id, &future); err != nil {
+		t.Fatal(err)
+	}
+	p, _, err := s.UsePersonalToken(ctx, []byte("h1"))
+	if err != nil || string(p.Scope) != `{"loki":"x"}` || p.ExpiresAt == nil {
+		t.Fatalf("renewed token: %+v %v", p, err)
+	}
+	if err := s.RenewPersonalToken(ctx, u.ID, id, nil); err != nil {
+		t.Fatal(err)
+	}
+	if p, _, _ := s.UsePersonalToken(ctx, []byte("h1")); p.ExpiresAt != nil {
+		t.Errorf("renewed to never, still expires %v", p.ExpiresAt)
+	}
+	if err := s.DeleteExpired(ctx, time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if list, _ := s.ListPersonalTokens(ctx, u.ID); len(list) != 1 || list[0].Name != "atlas" {
+		t.Errorf("after cleanup: %+v; want only atlas (gone is past the grace period)", list)
 	}
 }
 

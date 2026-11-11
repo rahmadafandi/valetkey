@@ -282,14 +282,18 @@ func (s *Store) ConnectedSystems(ctx context.Context, userID string) (map[string
 	return m, err
 }
 
-// DeleteExpired removes expired codes and tokens, and tool calls older than
-// auditBefore unless it is zero.
+// ExpiredTokenGrace is how long an expired personal token is kept, so its
+// owner can still renew or duplicate it. It cannot be used meanwhile.
+const ExpiredTokenGrace = 30 * 24 * time.Hour
+
+// DeleteExpired removes expired codes and tokens (personal tokens once past
+// ExpiredTokenGrace), and tool calls older than auditBefore unless it is zero.
 func (s *Store) DeleteExpired(ctx context.Context, auditBefore time.Time) error {
 	t := now()
 	for _, q := range []*bun.DeleteQuery{
 		s.db.NewDelete().Model((*Code)(nil)).Where("expires_at < ?", t),
 		s.db.NewDelete().Model((*Token)(nil)).Where("expires_at < ?", t),
-		s.db.NewDelete().Model((*PersonalToken)(nil)).Where("expires_at < ?", t),
+		s.db.NewDelete().Model((*PersonalToken)(nil)).Where("expires_at < ?", t.Add(-ExpiredTokenGrace)),
 	} {
 		if _, err := q.Exec(ctx); err != nil {
 			return err
@@ -341,6 +345,18 @@ func (s *Store) ListPersonalTokens(ctx context.Context, userID string) ([]Person
 func (s *Store) UpdatePersonalToken(ctx context.Context, t PersonalToken) error {
 	err := deleteOne(s.db.NewUpdate().Model(&t).Column("name", "tools", "scope", "max_writes_per_hour", "dry_run").
 		Where("user_id = ? AND id = ?", t.UserID, t.ID).Exec(ctx))
+	return notFound(err)
+}
+
+// RenewPersonalToken sets when one of the user's tokens expires (nil: never).
+// Its value, tools and scope stay. Other users' tokens are untouched.
+func (s *Store) RenewPersonalToken(ctx context.Context, userID, id string, expiresAt *time.Time) error {
+	if expiresAt != nil {
+		exp := expiresAt.UTC()
+		expiresAt = &exp
+	}
+	err := deleteOne(s.db.NewUpdate().Model((*PersonalToken)(nil)).Set("expires_at = ?", expiresAt).
+		Where("user_id = ? AND id = ?", userID, id).Exec(ctx))
 	return notFound(err)
 }
 

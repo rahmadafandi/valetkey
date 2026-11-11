@@ -60,6 +60,17 @@ func (s *Server) UpdatePersonalToken(ctx context.Context, userID, id string, n N
 	return s.Store.UpdatePersonalToken(ctx, t)
 }
 
+// RenewPersonalToken makes one of the user's tokens expire ttl from now, or
+// never when ttl is 0, keeping its value so nothing using it needs a new one.
+func (s *Server) RenewPersonalToken(ctx context.Context, userID, id string, ttl time.Duration) error {
+	var exp *time.Time
+	if ttl > 0 {
+		t := time.Now().Add(ttl)
+		exp = &t
+	}
+	return s.Store.RenewPersonalToken(ctx, userID, id, exp)
+}
+
 // CreatePersonalToken stores a new token for userID and returns it; only its hash is kept.
 func (s *Server) CreatePersonalToken(ctx context.Context, userID string, n NewToken) (string, error) {
 	t, err := s.personalToken(userID, n)
