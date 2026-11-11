@@ -149,7 +149,7 @@ The form asks for:
 
 **Edit** on `/tokens` changes all of these but the expiry. The token's value stays, and the change applies from its next call, so narrowing a scope or dropping a tool takes effect without handing the bot a new token.
 
-**Renew**, on a token's edit page, sets a new expiry (7, 30 or 90 days from now, or never) and keeps the value, tools and scope, so the bot keeps its token. An expired token cannot be used, but it stays on `/tokens` for 30 days so it can still be renewed; after that it is deleted.
+A token with under 7 days left is marked on `/tokens`. **Renew**, on a token's edit page, sets a new expiry (7, 30 or 90 days from now, or never) and keeps the value, tools and scope, so the bot keeps its token. An expired token cannot be used, but it stays on `/tokens` for 30 days so it can still be renewed; after that it is deleted.
 
 **Duplicate** on `/tokens` opens the create form filled in with another token's name, tools, scope, write limit and dry run. The new token gets its own value, and the original keeps working until you revoke it.
 
@@ -182,7 +182,7 @@ A built-in key must belong to an upstream you have turned on. If you later turn 
 
 ### Write limit and dry run
 
-The write limit counts a token's calls to tools that change things (`bitbucket_pr_create`, `bitbucket_pr_merge`, `bitbucket_pr_comment`, `jenkins_deploy`, `jenkins_rebuild`, `argocd_sync`, `notion_page_create`, `notion_page_append`) over the last hour. Calls that ended in `ok`, `error` or `dry_run` count. When the limit is reached, the next write is refused until older calls fall out of the hour. One token's limited writes run one at a time, from the count until the call is recorded, so parallel calls cannot overshoot the limit. A write waits while an earlier write on the same token is still running. The limit holds within one valetkey process; running several replicas against one database would let each replica count on its own. OAuth sessions have no write limit.
+The write limit counts a token's calls to tools that change things (`bitbucket_pr_create`, `bitbucket_pr_merge`, `bitbucket_pr_comment`, `jenkins_deploy`, `jenkins_rebuild`, `argocd_sync`, `notion_page_create`, `notion_page_append`) over the last hour. Calls that ended in `ok`, `error` or `dry_run` count, and so does a write that is still running (`pending` on the activity page). When the limit is reached, the next write is refused until older calls fall out of the hour. A limited write is stored as pending before it is counted, so the limit holds across several replicas on one database: of two parallel writes, the later always counts the earlier. Two writes racing on different replicas for the last place may both be refused. Within one replica, a token's limited writes run one at a time, and a write waits while an earlier one on the same token is still running. OAuth sessions have no write limit.
 
 A dry-run token goes through the scope and limit checks, then answers `dry-run: would call <tool> with <args>` without contacting the upstream. Read tools run as usual.
 
@@ -234,7 +234,7 @@ Names and defaults match [.env.example](.env.example).
 | `REFRESH_TOKEN_TTL` | no | `720h` | Lifetime of an OAuth refresh token |
 | `SESSION_TTL` | no | `12h` | How long a sign-in to the web pages lasts |
 | `CATALOG_FILE` | no | `catalog.json` | JSON list of other MCP servers shown on the home page |
-| `TZ` | no | `UTC` in the image | Zone for query times written without an offset |
+| `TZ` | no | `UTC` in the image | Zone for query times written without an offset. The `loki_query` and `metrics_query` descriptions name it, so agents see which zone applies |
 | `JENKINS_URL`, `JENKINS_INSECURE` | no | | Turns Jenkins on, `true` skips TLS verification |
 | `ARGOCD_URL`, `ARGOCD_INSECURE` | no | | Turns Argo CD on, `true` skips TLS verification |
 | `LOKI_URL`, `LOKI_INSECURE` | no | | Turns Loki on, `true` skips TLS verification |
