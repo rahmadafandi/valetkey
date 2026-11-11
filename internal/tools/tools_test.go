@@ -351,8 +351,8 @@ func (f *fakeAudit) RecordCall(ctx context.Context, c store.ToolCall) error {
 	return nil
 }
 
-func (f *fakeAudit) CountWrites(context.Context, string, time.Time) (int, error) {
-	return f.writes, nil
+func (f *fakeAudit) ReserveWrite(context.Context, store.ToolCall, time.Time) (string, int, error) {
+	return "reserved", f.writes + 1, nil
 }
 
 func TestAuditRecordsOAuthCall(t *testing.T) {
@@ -762,5 +762,22 @@ func TestProxiedToolChecksServerScope(t *testing.T) {
 	// Another server's rows, or none, leave the tool alone.
 	if text, isErr := callWith(Scope{"other": ServerRows{"database_id": {"5"}}}, `{"database_id":9}`); isErr || text != "metabase ran" {
 		t.Errorf("no rows: %q isErr=%v", text, isErr)
+	}
+}
+
+func TestLimitedWriteFinishesItsReservation(t *testing.T) {
+	deploys.Store(0)
+	a := &fakeAudit{writes: 1}
+	cs := connect(t, serveAudit(t, a), "cap3")
+	if _, isErr := call(t, cs, "fake_deploy", nil); isErr {
+		t.Fatal("a write under the limit was refused")
+	}
+	call(t, cs, "fake_echo", map[string]any{"msg": "x"})
+	if len(a.calls) != 2 || a.calls[0].ID != "reserved" || a.calls[0].Outcome != "ok" || a.calls[1].ID != "" {
+		t.Errorf("calls = %+v; the write must finish its reservation and the read store a new row", a.calls)
+	}
+	a.writes = 3
+	if _, isErr := call(t, cs, "fake_deploy", nil); !isErr || a.calls[2].ID != "reserved" || a.calls[2].Outcome != "refused" {
+		t.Errorf("over the limit: %+v; the reservation must end as refused", a.calls[2])
 	}
 }

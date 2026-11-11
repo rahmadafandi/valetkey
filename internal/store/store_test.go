@@ -309,3 +309,42 @@ func TestMigrationsIdempotent(t *testing.T) {
 		t.Errorf("status: %q %v", out, err)
 	}
 }
+
+func TestReserveWrite(t *testing.T) {
+	s := OpenTest(t)
+	u, _ := s.UpsertUser(ctx, "a@example.com")
+	since := time.Now().Add(-time.Hour)
+	s.RecordCall(ctx, ToolCall{UserID: u.ID, TokenID: "t1", Tool: "jenkins_deploy", IsWrite: true, Outcome: "ok"})
+	id1, n, err := s.ReserveWrite(ctx, ToolCall{UserID: u.ID, TokenID: "t1", TokenName: "atlas", Tool: "jenkins_deploy", Args: `{}`}, since)
+	if err != nil || id1 == "" || n != 2 {
+		t.Fatalf("first reservation: %q %d %v; want count 2", id1, n, err)
+	}
+	// A second call, as from another instance, sees the first one still running.
+	id2, n, err := s.ReserveWrite(ctx, ToolCall{UserID: u.ID, TokenID: "t1", Tool: "jenkins_deploy"}, since)
+	if err != nil || n != 3 {
+		t.Fatalf("second reservation: %d %v; want count 3", n, err)
+	}
+	if _, n, _ := s.ReserveWrite(ctx, ToolCall{UserID: u.ID, TokenID: "other", Tool: "jenkins_deploy"}, since); n != 1 {
+		t.Errorf("another token's count = %d, want 1", n)
+	}
+	// A refused reservation stops counting; a finished one keeps counting.
+	if err := s.RecordCall(ctx, ToolCall{ID: id2, Outcome: "refused", Message: "refused: limit"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.RecordCall(ctx, ToolCall{ID: id1, Outcome: "ok", MS: 12}); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := s.CountWrites(ctx, "t1", since); n != 2 {
+		t.Errorf("count after finishing = %d, want 2", n)
+	}
+	calls, _ := s.ListCalls(ctx, CallFilter{UserID: u.ID, Outcome: "ok", Limit: 200})
+	var done *ToolCall
+	for i := range calls {
+		if calls[i].ID == id1 {
+			done = &calls[i]
+		}
+	}
+	if done == nil || done.MS != 12 || done.TokenName != "atlas" || done.Tool != "jenkins_deploy" || !done.IsWrite {
+		t.Errorf("finished row = %+v; finishing must keep what the reservation stored", done)
+	}
+}

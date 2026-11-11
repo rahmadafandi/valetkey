@@ -81,10 +81,12 @@ const (
 
 var auditTimeout = 5 * time.Second
 
-// Audit stores every tool call and answers write-budget questions.
+// Audit stores every tool call and keeps a token's write budget.
 type Audit interface {
+	// RecordCall stores a call, or finishes a reserved one when c.ID is set.
 	RecordCall(ctx context.Context, c store.ToolCall) error
-	CountWrites(ctx context.Context, tokenID string, since time.Time) (int, error)
+	// ReserveWrite stores c as a pending write and counts the token's writes since, c among them.
+	ReserveWrite(ctx context.Context, c store.ToolCall, since time.Time) (id string, n int, err error)
 }
 
 // RestrictionKey is the TokenInfo.Extra key carrying a personal access token's *Restriction.
@@ -143,6 +145,7 @@ func handler(in Integration, t Tool, load LoadCreds, publicURL string, log *slog
 		var out string
 		var err error
 		var dryRun bool
+		var reserved string // the audit row a limited write holds, finished when the call ends
 		switch {
 		case r != nil && !r.Allows(t.Name):
 			err = Refuse("%s: not allowed for this token", t.Name)
@@ -154,18 +157,22 @@ func handler(in Integration, t Tool, load LoadCreds, publicURL string, log *slog
 				err = r.Scope.Check(in, t.Name, args)
 			}
 			if err == nil && t.Destructive && r.MaxWritesPerHour > 0 && audit != nil {
-				// Held until the call is recorded, so parallel writes cannot all pass the same count.
+				// The lock spares one instance's parallel writes from refusing each other;
+				// the reservation is what holds the limit across instances.
 				unlock, lerr := lockWrites(ctx, r.TokenID)
 				if lerr != nil {
 					return nil, lerr
 				}
 				defer unlock()
-				n, cerr := audit.CountWrites(ctx, r.TokenID, time.Now().Add(-time.Hour))
+				var n int
+				var rerr error
+				reserved, n, rerr = audit.ReserveWrite(ctx, store.ToolCall{UserID: userID, TokenID: r.TokenID, TokenName: r.Name,
+					Tool: t.Name, Args: truncate(string(req.Params.Arguments), 4096)}, time.Now().Add(-time.Hour))
 				switch {
-				case cerr != nil:
-					log.Error("count writes", "token", r.Name, "err", cerr)
+				case rerr != nil:
+					log.Error("reserve write", "token", r.Name, "err", rerr)
 					err = fmt.Errorf("%s: could not check this token's write limit (internal error)", t.Name)
-				case n >= r.MaxWritesPerHour:
+				case n > r.MaxWritesPerHour:
 					err = Refuse("%s: write limit of %d/hour reached for this token", t.Name, r.MaxWritesPerHour)
 				}
 			}
@@ -200,8 +207,13 @@ func handler(in Integration, t Tool, load LoadCreds, publicURL string, log *slog
 		if r != nil {
 			via = "token:" + r.Name
 		}
-		log.Info("tool call", "user", email, "via", via, "tool", t.Name, "args", truncate(string(req.Params.Arguments), 1024),
-			"ok", err == nil, "ms", time.Since(start).Milliseconds())
+		attrs := []any{"user", email, "via", via, "tool", t.Name, "args", truncate(string(req.Params.Arguments), 1024),
+			"ok", err == nil, "ms", time.Since(start).Milliseconds()}
+		if err != nil {
+			// The same text the agent gets, so a failure can be read from the log alone.
+			attrs = append(attrs, "err", truncate(err.Error(), 1024))
+		}
+		log.Info("tool call", attrs...)
 		if audit != nil && userID != "" {
 			outcome := "ok"
 			switch {
@@ -212,7 +224,7 @@ func handler(in Integration, t Tool, load LoadCreds, publicURL string, log *slog
 			case err != nil:
 				outcome = "error"
 			}
-			c := store.ToolCall{UserID: userID, Tool: t.Name, IsWrite: t.Destructive, Outcome: outcome,
+			c := store.ToolCall{ID: reserved, UserID: userID, Tool: t.Name, IsWrite: t.Destructive, Outcome: outcome,
 				Args: truncate(string(req.Params.Arguments), 4096), MS: time.Since(start).Milliseconds()}
 			if err != nil {
 				c.Message = truncate(err.Error(), 1024)
@@ -241,8 +253,9 @@ var (
 	writeLocks   = map[string]chan struct{}{}
 )
 
-// lockWrites serialises one token's limited write calls, from counting to recording.
-// ponytail: in-process only, which fits one instance; several replicas need a reservation row in the database.
+// lockWrites serialises one token's limited write calls on this instance, from
+// reserving to recording, so they do not refuse each other at the limit. Across
+// instances the reservation row holds the limit.
 func lockWrites(ctx context.Context, tokenID string) (unlock func(), err error) {
 	writeLocksMu.Lock()
 	l, ok := writeLocks[tokenID]

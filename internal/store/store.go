@@ -93,7 +93,7 @@ type ToolCall struct {
 	Tool          string    `bun:"tool"`
 	IsWrite       bool      `bun:"is_write"`
 	Args          string    `bun:"args"`
-	Outcome       string    `bun:"outcome"` // ok, error, refused, dry_run
+	Outcome       string    `bun:"outcome"` // ok, error, refused, dry_run; pending while a limited write runs
 	Message       string    `bun:"message"`
 	MS            int64     `bun:"ms"`
 	At            time.Time `bun:"at"`
@@ -366,7 +366,13 @@ func (s *Store) DeletePersonalToken(ctx context.Context, userID, id string) erro
 	return notFound(err)
 }
 
+// RecordCall stores a tool call. With c.ID set it finishes the row ReserveWrite
+// made, setting how the call ended.
 func (s *Store) RecordCall(ctx context.Context, c ToolCall) error {
+	if c.ID != "" {
+		_, err := s.db.NewUpdate().Model(&c).Column("outcome", "message", "ms").WherePK().Exec(ctx)
+		return err
+	}
 	c.ID = newID()
 	if c.At.IsZero() {
 		c.At = now()
@@ -376,12 +382,26 @@ func (s *Store) RecordCall(ctx context.Context, c ToolCall) error {
 	return err
 }
 
+// ReserveWrite stores c as a pending write and counts the token's writes since
+// a time, c among them. The row is stored before the count, so of two calls
+// racing on separate instances the later one always sees the earlier: the
+// limit is never exceeded. Both may see each other and both be refused.
+func (s *Store) ReserveWrite(ctx context.Context, c ToolCall, since time.Time) (id string, n int, err error) {
+	c.ID, c.At, c.IsWrite, c.Outcome = newID(), now(), true, "pending"
+	if _, err := s.db.NewInsert().Model(&c).Exec(ctx); err != nil {
+		return "", 0, err
+	}
+	n, err = s.CountWrites(ctx, c.TokenID, since)
+	return c.ID, n, err
+}
+
 // CountWrites counts a token's write calls since a time that used the
-// upstream or would have (ok, error, dry_run); refusals do not count.
+// upstream or would have (ok, error, dry_run), or are still running
+// (pending); refusals do not count.
 func (s *Store) CountWrites(ctx context.Context, tokenID string, since time.Time) (int, error) {
 	n, err := s.db.NewSelect().Model((*ToolCall)(nil)).
 		Where("token_id = ? AND is_write = ? AND at >= ?", tokenID, true, since.UTC()).
-		Where("outcome IN (?)", bun.In([]string{"ok", "error", "dry_run"})).
+		Where("outcome IN (?)", bun.In([]string{"ok", "error", "dry_run", "pending"})).
 		Count(ctx)
 	return int(n), err
 }
