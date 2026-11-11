@@ -487,3 +487,36 @@ func TestCallErrorHidesAddresses(t *testing.T) {
 		t.Errorf("log lacks the raw errors: %s", log)
 	}
 }
+
+func TestNullableRequiredArgsAreOptional(t *testing.T) {
+	nullableInt := map[string]any{"oneOf": []any{map[string]any{"type": "integer"}, map[string]any{"type": "null"}}}
+	f := newFake(t, fakeOpts{Tools: []fakeTool{{Name: "browse", Annotations: readOnly(), Schema: map[string]any{
+		"type": "object",
+		"properties": map[string]any{
+			"action":         map[string]any{"type": "string"},
+			"database_id":    nullableInt,
+			"include_hidden": map[string]any{"type": []any{"boolean", "null"}},
+		},
+		"required": []any{"action", "database_id", "include_hidden"},
+	}}}})
+	p := newProxy(t, f)
+	a := approve(t, p, f, "a@example.com", "metabase", nil)
+	ints, _ := p.Integrations(ctx, a)
+
+	_, tl := findTool(t, ints, "metabase__browse")
+	if req, _ := tl.Schema["required"].([]any); len(req) != 1 || req[0] != "action" {
+		t.Fatalf("required = %v, want only action", tl.Schema["required"])
+	}
+	if _, err := call(t, p, a, ints, "metabase__browse", `{"action":"list_databases"}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, args := f.called("browse"); args != `{"action":"list_databases","database_id":null,"include_hidden":null}` {
+		t.Errorf("upstream got %s, want the left-out arguments as null", args)
+	}
+	if _, err := call(t, p, a, ints, "metabase__browse", `{"action":"list_schemas","database_id":252}`); err != nil {
+		t.Fatal(err)
+	}
+	if _, args := f.called("browse"); args != `{"action":"list_schemas","database_id":252,"include_hidden":null}` {
+		t.Errorf("upstream got %s, want the sent value kept", args)
+	}
+}

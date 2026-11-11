@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"slices"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -151,10 +152,11 @@ func (i *integration) Tools() []tools.Tool {
 			i.p.log().Warn("skipping unusable approved tool", "upstream", i.u.ID, "tool", row.Name)
 			continue
 		}
+		schema, nullable := optionalNulls(schema)
 		out = append(out, tools.Tool{
 			Name: name, Description: row.Description, Schema: schema,
 			Destructive: row.Writes, Unscoped: true,
-			Run: i.caller(row.Name),
+			Run: i.caller(row.Name, nullable),
 		})
 	}
 	return out
@@ -163,11 +165,12 @@ func (i *integration) Tools() []tools.Tool {
 // caller opens a session per call: initialize, tools/call with the upstream's own name, close.
 // An OAuth login is refreshed when it is about to expire, or once after a 401.
 // ponytail: two round trips per call; pool sessions per (user, upstream) if latency matters.
-func (i *integration) caller(tool string) func(ctx context.Context, c tools.Creds, args json.RawMessage) (string, error) {
+func (i *integration) caller(tool string, nullable []string) func(ctx context.Context, c tools.Creds, args json.RawMessage) (string, error) {
 	return func(ctx context.Context, c tools.Creds, args json.RawMessage) (string, error) {
 		if len(args) == 0 || string(args) == "null" {
 			args = json.RawMessage("{}")
 		}
+		args = fillNulls(args, nullable)
 		oauth := i.u.Auth == "oauth" && c["pending"] == ""
 		refreshed := false
 		if oauth && expiring(c) {
@@ -187,6 +190,86 @@ func (i *integration) caller(tool string) func(ctx context.Context, c tools.Cred
 		}
 		return out, i.safe(tool, err)
 	}
+}
+
+// optionalNulls drops from a schema's required list the properties that accept
+// null, and returns their names. Some servers require every argument but
+// refuse a value for one that does not apply (Metabase: "include_hidden does
+// not apply to action list_databases"); an agent made to fill each one sends
+// a default and is refused. Optional, it leaves them out, and fillNulls sends
+// null, which such a server reads as absent.
+func optionalNulls(schema map[string]any) (map[string]any, []string) {
+	req, _ := schema["required"].([]any)
+	props, _ := schema["properties"].(map[string]any)
+	var keep []any
+	var nullable []string
+	for _, r := range req {
+		name, _ := r.(string)
+		if p, ok := props[name].(map[string]any); ok && acceptsNull(p) {
+			nullable = append(nullable, name)
+			continue
+		}
+		keep = append(keep, r)
+	}
+	if len(nullable) == 0 {
+		return schema, nil
+	}
+	if len(keep) == 0 {
+		delete(schema, "required")
+	} else {
+		schema["required"] = keep
+	}
+	return schema, nullable
+}
+
+// acceptsNull reports whether a property schema allows null: type "null", a
+// type list holding it, or a oneOf/anyOf branch that does.
+func acceptsNull(p map[string]any) bool {
+	switch t := p["type"].(type) {
+	case string:
+		if t == "null" {
+			return true
+		}
+	case []any:
+		if slices.Contains(t, any("null")) {
+			return true
+		}
+	}
+	for _, k := range []string{"oneOf", "anyOf"} {
+		branches, _ := p[k].([]any)
+		for _, b := range branches {
+			if m, ok := b.(map[string]any); ok && acceptsNull(m) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// fillNulls sets each of names the call leaves out to null, as the upstream
+// still requires them. Arguments that are not an object pass through.
+func fillNulls(args json.RawMessage, names []string) json.RawMessage {
+	if len(names) == 0 {
+		return args
+	}
+	var m map[string]json.RawMessage
+	if json.Unmarshal(args, &m) != nil || m == nil {
+		return args
+	}
+	added := false
+	for _, n := range names {
+		if _, ok := m[n]; !ok {
+			m[n], added = json.RawMessage("null"), true
+		}
+	}
+	if !added {
+		return args
+	}
+	out, err := json.Marshal(m)
+	if err != nil {
+		return args
+	}
+	return out
 }
 
 // toolError is the upstream's own isError answer, which the agent sees as is.
