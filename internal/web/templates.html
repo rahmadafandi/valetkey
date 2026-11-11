@@ -148,9 +148,10 @@
     <li>
       <span class="what"><strong>{{.Name}}</strong><br><span class="meta" title="Dates and times are UTC">{{len .Tools}} tool{{if ne (len .Tools) 1}}s{{end}} · created {{.CreatedAt.UTC.Format "2006-01-02"}}
       · {{if .LastUsedAt}}last used {{.LastUsedAt.UTC.Format "2006-01-02 15:04"}} UTC{{else}}never used{{end}}
-      · {{if .ExpiresAt}}expires {{.ExpiresAt.UTC.Format "2006-01-02"}}{{else}}no expiry{{end}}
+      · {{if expired .ExpiresAt}}<strong class="error">expired {{.ExpiresAt.UTC.Format "2006-01-02"}}</strong>{{else if .ExpiresAt}}expires {{.ExpiresAt.UTC.Format "2006-01-02"}}{{else}}no expiry{{end}}
       · {{if .DryRun}}dry run · {{end}}{{if .MaxWritesPerHour}}{{.MaxWritesPerHour}} writes/hour{{else}}no write limit{{end}}</span></span>
-      <a class="btn small" href="/tokens/{{.ID}}/edit" aria-label="Edit {{.Name}}">Edit</a>
+      <a class="btn small" href="/tokens/{{.ID}}/edit" aria-label="{{if expired .ExpiresAt}}Renew or edit{{else}}Edit{{end}} {{.Name}}">{{if expired .ExpiresAt}}Renew{{else}}Edit{{end}}</a>
+      <a class="btn small" href="/tokens/{{.ID}}/duplicate#new-h" aria-label="Duplicate {{.Name}}">Duplicate</a>
       <form method="post" action="/tokens/{{.ID}}/revoke"><button class="btn small danger" type="submit" data-confirm="Revoke {{.Name}}? Anything using it stops working right away." aria-label="Revoke {{.Name}}">Revoke</button></form>
     </li>
   {{else}}
@@ -160,6 +161,7 @@
 </section>
 <section class="card" aria-labelledby="new-h">
   <h2 id="new-h">Create a token</h2>
+  {{if .CopiedFrom}}<p class="hint">Filled in from <strong>{{.CopiedFrom}}</strong>. Check the name, tools and scope, then create. The new token gets its own value; {{.CopiedFrom}} keeps working until you revoke it.</p>{{end}}
   {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
   <form method="post" action="/tokens">
     <label for="name">Name</label>
@@ -167,12 +169,7 @@
     <input id="name" name="name" value="{{.Name}}" placeholder="atlas" autocomplete="off" aria-describedby="name-hint">
     {{template "token_fields" .}}
     <label for="expiry">Expires</label>
-    <select id="expiry" name="expiry">
-      <option value="7" {{if eq .Expiry "7"}}selected{{end}}>in 7 days</option>
-      <option value="30" {{if eq .Expiry "30"}}selected{{end}}>in 30 days</option>
-      <option value="90" {{if eq .Expiry "90"}}selected{{end}}>in 90 days</option>
-      <option value="0" {{if eq .Expiry "0"}}selected{{end}}>never</option>
-    </select>
+    {{template "expiry_select" .}}
     <div class="actions"><button class="btn primary" type="submit" data-busy="Creating…">Create token</button></div>
   </form>
   <p class="muted">Revoking a token does not affect your other clients.</p>
@@ -325,9 +322,28 @@
     </script>
 {{end}}
 
+{{define "expiry_select"}}
+    <select id="expiry" name="expiry">
+      <option value="7" {{if eq .Expiry "7"}}selected{{end}}>in 7 days</option>
+      <option value="30" {{if eq .Expiry "30"}}selected{{end}}>in 30 days</option>
+      <option value="90" {{if eq .Expiry "90"}}selected{{end}}>in 90 days</option>
+      <option value="0" {{if eq .Expiry "0"}}selected{{end}}>never</option>
+    </select>
+{{end}}
+
 {{define "token_edit"}}{{template "top" (page "Edit token" .Email "tokens")}}
 <h1>Edit {{.Name}}</h1>
-<p class="lead">Changes apply from the token's next call. Its value and expiry stay as they are, so nothing using it needs a new token.</p>
+<p class="lead">Changes apply from the token's next call. Its value stays as it is, so nothing using it needs a new token.</p>
+<section class="card" aria-labelledby="renew-h">
+  <h2 id="renew-h">Expiry</h2>
+  <p>{{if expired .ExpiresAt}}<strong class="error">Expired {{.ExpiresAt.UTC.Format "2006-01-02"}}.</strong> Renew it within 30 days of that date to use it again; after that it is deleted.{{else if .ExpiresAt}}Expires {{.ExpiresAt.UTC.Format "2006-01-02"}} (UTC).{{else}}Never expires.{{end}}</p>
+  {{if .RenewError}}<p class="error" role="alert">{{.RenewError}}</p>{{end}}
+  <form method="post" action="/tokens/{{.ID}}/renew">
+    <label for="expiry">Renew: expires</label>
+    {{template "expiry_select" .}}
+    <div class="actions"><button class="btn primary" type="submit" data-busy="Renewing…">Renew</button></div>
+  </form>
+</section>
 <section class="card" aria-labelledby="edit-h">
   <h2 id="edit-h" class="visually-hidden">Token settings</h2>
   {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}

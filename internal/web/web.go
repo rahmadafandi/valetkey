@@ -36,6 +36,7 @@ var tmpl = template.Must(template.New("").Funcs(template.FuncMap{
 	"head": func() template.HTML { return ui.Head },
 	// outcomeLabel turns a stored outcome into the words a page shows.
 	"outcomeLabel": func(o string) string { return strings.ReplaceAll(o, "_", " ") },
+	"expired":      func(t *time.Time) bool { return t != nil && !t.After(time.Now()) },
 	// page carries what the shared header needs; here marks the current nav item.
 	"page": func(title, email, here string) map[string]string {
 		return map[string]string{"Title": title, "Email": email, "Here": here}
@@ -86,6 +87,8 @@ func (h *Web) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /tokens/{id}/revoke", h.revokeToken)
 	mux.HandleFunc("GET /tokens/{id}/edit", h.editToken)
 	mux.HandleFunc("POST /tokens/{id}", h.updateToken)
+	mux.HandleFunc("POST /tokens/{id}/renew", h.renewToken)
+	mux.HandleFunc("GET /tokens/{id}/duplicate", h.duplicateToken)
 	mux.HandleFunc("GET /activity", h.activity)
 	h.upstreamRoutes(mux)
 }
@@ -395,34 +398,99 @@ func (h *Web) readTokenForm(r *http.Request, u store.User) (n auth.NewToken, for
 	return n, form, "", nil
 }
 
-func (h *Web) editToken(w http.ResponseWriter, r *http.Request) {
-	u, ok := h.Auth.WebUser(r)
+// ownToken finds the signed-in user's token named by the path's id. It writes
+// the redirect, the 404 or the failure itself when ok is false.
+func (h *Web) ownToken(w http.ResponseWriter, r *http.Request) (u store.User, t store.PersonalToken, ok bool) {
+	u, ok = h.Auth.WebUser(r)
 	if !ok {
 		http.Redirect(w, r, "/login", http.StatusFound)
-		return
+		return u, t, false
 	}
 	list, err := h.Auth.Store.ListPersonalTokens(r.Context(), u.ID)
 	if err != nil {
 		h.fail(w, err)
-		return
+		return u, t, false
 	}
 	i := slices.IndexFunc(list, func(t store.PersonalToken) bool { return t.ID == r.PathValue("id") })
 	if i < 0 {
 		http.NotFound(w, r)
+		return u, t, false
+	}
+	return u, list[i], true
+}
+
+// tokenForm is what the create and edit forms show for an existing token.
+func tokenForm(t store.PersonalToken) map[string]any {
+	return map[string]any{"Name": t.Name, "ScopeIn": inputFromStored(t.Scope), "Tools": t.Tools,
+		"DryRun": t.DryRun, "MaxWrites": strconv.Itoa(t.MaxWritesPerHour)}
+}
+
+func (h *Web) editToken(w http.ResponseWriter, r *http.Request) {
+	u, t, ok := h.ownToken(w, r)
+	if !ok {
 		return
 	}
-	t := list[i]
-	h.renderEdit(w, r, u, t.ID, map[string]any{"Name": t.Name, "ScopeIn": inputFromStored(t.Scope), "Tools": t.Tools,
-		"DryRun": t.DryRun, "MaxWrites": strconv.Itoa(t.MaxWritesPerHour)}, http.StatusOK)
+	h.renderEdit(w, r, u, t, tokenForm(t), http.StatusOK)
+}
+
+// duplicateToken shows the create form filled in from an existing token, so
+// a new token with the same tools and scope needs no retyping.
+func (h *Web) duplicateToken(w http.ResponseWriter, r *http.Request) {
+	u, t, ok := h.ownToken(w, r)
+	if !ok {
+		return
+	}
+	form := tokenForm(t)
+	form["CopiedFrom"] = t.Name
+	h.renderTokens(w, r, u, form, http.StatusOK)
 }
 
 // renderEdit shows the edit form; form carries the token's fields and Error.
-func (h *Web) renderEdit(w http.ResponseWriter, r *http.Request, u store.User, id string, form map[string]any, status int) {
+func (h *Web) renderEdit(w http.ResponseWriter, r *http.Request, u store.User, t store.PersonalToken, form map[string]any, status int) {
 	if !h.scopeForm(w, r, u, form) {
 		return
 	}
-	form["ID"], form["Email"] = id, u.Email
+	form["ID"], form["Email"], form["ExpiresAt"] = t.ID, u.Email, t.ExpiresAt
+	if form["Expiry"] == nil {
+		form["Expiry"] = "30"
+	}
 	render(w, status, "token_edit", form)
+}
+
+// renewToken moves one of the user's tokens' expiry, keeping its value, tools
+// and scope; an expired token kept for ExpiredTokenGrace works again.
+func (h *Web) renewToken(w http.ResponseWriter, r *http.Request) {
+	if r.Header.Get("Origin") != h.PublicURL {
+		http.Error(w, "cross-origin request refused", http.StatusForbidden)
+		return
+	}
+	u, t, ok := h.ownToken(w, r)
+	if !ok {
+		return
+	}
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "malformed form", http.StatusBadRequest)
+		return
+	}
+	expiry := r.PostForm.Get("expiry")
+	ttl, ok := expiries[expiry]
+	if !ok {
+		form := tokenForm(t)
+		form["Expiry"], form["RenewError"] = expiry, "Pick an expiry."
+		h.renderEdit(w, r, u, t, form, http.StatusBadRequest)
+		return
+	}
+	err := h.Auth.RenewPersonalToken(r.Context(), u.ID, t.ID, ttl)
+	if errors.Is(err, store.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	h.Log.Info("personal token renewed", "user", u.Email, "id", t.ID, "name", t.Name, "expiry_days", expiry)
+	http.Redirect(w, r, "/tokens", http.StatusSeeOther)
 }
 
 func (h *Web) updateToken(w http.ResponseWriter, r *http.Request) {
@@ -430,16 +498,15 @@ func (h *Web) updateToken(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cross-origin request refused", http.StatusForbidden)
 		return
 	}
-	u, ok := h.Auth.WebUser(r)
+	u, t, ok := h.ownToken(w, r)
 	if !ok {
-		http.Redirect(w, r, "/login", http.StatusFound)
 		return
 	}
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "malformed form", http.StatusBadRequest)
 		return
 	}
-	id := r.PathValue("id")
+	id := t.ID
 	n, form, problem, err := h.readTokenForm(r, u)
 	if err != nil {
 		h.fail(w, err)
@@ -457,7 +524,7 @@ func (h *Web) updateToken(w http.ResponseWriter, r *http.Request) {
 	}
 	if problem != "" {
 		form["Error"] = problem
-		h.renderEdit(w, r, u, id, form, http.StatusBadRequest)
+		h.renderEdit(w, r, u, t, form, http.StatusBadRequest)
 		return
 	}
 	h.Log.Info("personal token edited", "user", u.Email, "id", id, "name", n.Name, "tools", n.Tools)

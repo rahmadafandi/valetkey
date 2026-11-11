@@ -304,6 +304,58 @@ func TestTokens(t *testing.T) {
 	}
 }
 
+func TestRenewAndDuplicateToken(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	past := time.Now().Add(-time.Hour)
+	id, err := e.as.Store.CreatePersonalToken(ctx, store.PersonalToken{UserID: e.user.ID, Name: "atlas", Tools: []string{"jenkins_deploy"},
+		Scope: []byte(`{"fake":["x"]}`), MaxWritesPerHour: 7, ExpiresAt: &past}, []byte("hash-atlas"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, body := e.get(t, "/tokens", true); !strings.Contains(body, "expired ") || !strings.Contains(body, "/tokens/"+id+"/duplicate") {
+		t.Errorf("list does not mark the expired token or offer duplicate:\n%s", body)
+	}
+
+	// Duplicate fills the create form from the token.
+	code, body := e.get(t, "/tokens/"+id+"/duplicate", true)
+	if code != 200 || !strings.Contains(body, "Filled in from <strong>atlas</strong>") || !strings.Contains(body, `value="atlas"`) ||
+		!strings.Contains(body, `value="jenkins_deploy" checked`) || !strings.Contains(body, `>x</textarea>`) || !strings.Contains(body, `value="7"`) {
+		t.Errorf("duplicate form: %d\n%s", code, body)
+	}
+	other, _ := e.as.Store.UpsertUser(ctx, "someone@example.com")
+	theirID, _ := e.as.Store.CreatePersonalToken(ctx, store.PersonalToken{UserID: other.ID, Name: "theirs", Tools: []string{"loki_query"}, Scope: []byte(`{}`)}, []byte("hash-theirs"))
+	if code, _ := e.get(t, "/tokens/"+theirID+"/duplicate", true); code != http.StatusNotFound {
+		t.Errorf("duplicate another user's token: %d", code)
+	}
+
+	// Renew keeps the value, tools and scope.
+	renew := "/tokens/" + id + "/renew"
+	if code, _ := e.post(t, renew, url.Values{"expiry": {"30"}}, "https://evil.example"); code != http.StatusForbidden {
+		t.Errorf("renew foreign Origin: %d", code)
+	}
+	if code, body := e.post(t, renew, url.Values{"expiry": {"365"}}, e.url); code != 400 || !strings.Contains(body, "Pick an expiry.") {
+		t.Errorf("renew bad expiry: %d", code)
+	}
+	if code, _ := e.post(t, "/tokens/"+theirID+"/renew", url.Values{"expiry": {"30"}}, e.url); code != http.StatusNotFound {
+		t.Errorf("renew another user's token: %d", code)
+	}
+	if code, _ := e.post(t, renew, url.Values{"expiry": {"30"}}, e.url); code != http.StatusSeeOther {
+		t.Fatalf("renew: %d", code)
+	}
+	list, _ := e.as.Store.ListPersonalTokens(ctx, e.user.ID)
+	p := list[0]
+	if p.ExpiresAt == nil || p.ExpiresAt.Before(time.Now().Add(29*24*time.Hour)) || string(p.Scope) != `{"fake":["x"]}` || p.MaxWritesPerHour != 7 || string(p.Hash) != "hash-atlas" {
+		t.Errorf("renewed token: %+v", p)
+	}
+	if code, _ := e.post(t, renew, url.Values{"expiry": {"0"}}, e.url); code != http.StatusSeeOther {
+		t.Fatalf("renew never: %d", code)
+	}
+	if list, _ := e.as.Store.ListPersonalTokens(ctx, e.user.ID); list[0].ExpiresAt != nil {
+		t.Errorf("renew to never left an expiry: %v", list[0].ExpiresAt)
+	}
+}
+
 func TestConnectSignInAndExchange(t *testing.T) {
 	e := newEnv(t)
 	if _, body := e.get(t, "/connect/fake", true); !strings.Contains(body, `href="https://idp.test/start?x=1&amp;y=2"`) {
