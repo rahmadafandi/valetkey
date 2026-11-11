@@ -94,6 +94,20 @@ textarea{min-height:96px;line-height:1.45}
 .outcome.dry_run{background:var(--dry-bg);color:var(--dry-fg)}
 p.error{background:var(--bad-bg);color:var(--bad-fg);border-radius:12px;padding:10px 14px;margin:0 0 12px}
 p.notice{background:var(--ok-bg);color:var(--ok-fg);border-radius:12px;padding:10px 14px;margin:0 0 12px}
+.srv{background:var(--field);border-radius:20px;padding:14px 16px;margin:12px 0 0}
+.limit{color:var(--muted);font-size:14px;margin-left:6px}
+.scope-row{display:flex;flex-wrap:wrap;gap:8px;align-items:flex-start;margin:10px 0 0}
+.scope-row select{flex:1 1 200px;width:auto}
+.scope-row textarea,.scope-row .chips{flex:2 1 260px;min-width:0}
+.scope-row .hint,.stale{flex-basis:100%;margin:0}
+.stale{color:var(--bad-fg);font-size:15px}
+.chips{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.chips input,.chips select{flex:1 1 180px;width:auto}
+.chip{display:inline-flex;align-items:center;gap:2px;max-width:100%;background:var(--field);border-radius:999px;padding:2px 4px 2px 14px;overflow-wrap:anywhere}
+.srv .chip{background:var(--raised)}
+.chip button{flex:none;border:0;background:transparent;color:inherit;font:inherit;font-size:20px;line-height:1;cursor:pointer;width:36px;height:36px;border-radius:999px}
+.chip button:hover{background:var(--ring)}
+.srv .add-row{margin-top:10px}
 .filters{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end;margin:12px 0 8px}
 .filters > div{flex:1 1 150px;min-width:0}
 .filters label{margin:0 0 4px}

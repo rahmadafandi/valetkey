@@ -187,13 +187,47 @@
         <span><code>{{.Name}}</code>{{if .Destructive}} <span class="writes">changes things</span>{{end}}</span></label>
       {{end}}
     </fieldset>
-    {{if .ProxiedRows}}
+    {{if .Scope.Families}}
+    <fieldset aria-describedby="reach-hint">
+      <legend>What those tools may reach</legend>
+      <p class="hint" id="reach-hint">One value per line. A tool family left empty reaches nothing.</p>
+      {{range .Scope.Families}}
+      <label for="scope-{{.Key}}">{{.Label}}</label>
+      {{if .Note}}<p class="hint" id="scope-{{.Key}}-hint">{{.Note}}</p>{{end}}
+      {{if .Single}}<input id="scope-{{.Key}}" class="mono" name="scope.{{.Key}}" value="{{.Value}}" placeholder="{{.Placeholder}}" autocomplete="off"{{if .Note}} aria-describedby="scope-{{.Key}}-hint"{{end}}>
+      {{else}}<textarea id="scope-{{.Key}}" class="vals mono" name="scope.{{.Key}}" rows="2" placeholder="{{.Placeholder}}"{{if .Note}} aria-describedby="scope-{{.Key}}-hint"{{end}}>{{.Value}}</textarea>{{end}}
+      {{end}}
+    </fieldset>
+    {{end}}
+    {{if .Scope.Servers}}
     <fieldset aria-describedby="proxied-hint">
       <legend>From your MCP servers</legend>
-      <p class="hint" id="proxied-hint">valetkey limits which of these tools a token may call, not what they touch. The scope below does not apply to them.</p>
-      {{range .ProxiedRows}}
-      <label class="check"><input type="checkbox" name="tools" value="{{.Name}}" {{if .Checked}}checked{{end}}>
-        <span><code>{{.Name}}</code>{{if .Destructive}} <span class="writes">changes things</span>{{end}}</span></label>
+      <p class="hint" id="proxied-hint">Pick the tools, then limit them if you want: a call is only allowed when its argument is one of the values you list. With several rows, any one of them may match, and every row argument a call sends must match. Tools without a listed argument are not limited.</p>
+      {{range $srv := .Scope.Servers}}
+      <div class="srv" data-server="{{$srv.Name}}">
+        <strong>{{$srv.Name}}</strong>
+        {{range $srv.Tools}}
+        <div class="tool-row" data-args="{{join .Args " "}}"><label class="check"><input type="checkbox" name="tools" value="{{.Name}}" {{if .Checked}}checked{{end}}>
+          <span><code>{{.Name}}</code>{{if .Destructive}} <span class="writes">changes things</span>{{end}} <span class="limit">{{.Limit}}</span></span></label></div>
+        {{end}}
+        {{if $srv.Reserved}}
+        <p class="hint">This server's name is a built-in scope name, so its tools cannot be limited. Remove it and add it again under another name.</p>
+        {{else}}
+        {{range $row := $srv.Rows}}
+        <div class="scope-row">
+          <select name="arg.{{$srv.Name}}" aria-label="Argument">
+            <option value="">Pick an argument</option>
+            {{range $srv.Args}}<option value="{{.Path}}"{{if eq .Path $row.Arg}} selected{{end}}{{if .Enum}} data-enum="{{join .Enum "\n"}}"{{end}}>{{.Path}}</option>{{end}}
+            {{if $row.Stale}}<option value="{{$row.Arg}}" selected>{{$row.Arg}}</option>{{end}}
+          </select>
+          <textarea class="vals" name="vals.{{$srv.Name}}" rows="2" aria-label="Allowed values">{{$row.Values}}</textarea>
+          {{if $row.Stale}}<span class="stale">No approved tool has this argument any more, so it limits nothing.</span>{{end}}
+          {{if $row.Enum}}<span class="hint">Allowed: {{join $row.Enum ", "}}</span>{{end}}
+        </div>
+        {{end}}
+        <button type="button" class="btn small add-row" hidden>Limit by another argument</button>
+        {{end}}
+      </div>
       {{end}}
     </fieldset>
     {{end}}
@@ -202,10 +236,93 @@
     <input id="max_writes" name="max_writes" type="number" min="0" max="1000" value="{{if .MaxWrites}}{{.MaxWrites}}{{else}}20{{end}}" aria-describedby="max-hint">
     <label class="check spaced" for="dry_run"><input id="dry_run" type="checkbox" name="dry_run" {{if .DryRun}}checked{{end}}>
       <span>Dry run: tools that change things only say what they would do</span></label>
-    <label for="scope">Scope</label>
-    <p class="hint" id="scope-hint">JSON that names what each tool family may reach. A family left out reaches nothing.</p>
-    <textarea id="scope" name="scope" rows="4" class="mono" aria-describedby="scope-hint"
-      placeholder='{"bitbucket":"acme/web","jenkins":["deploy-web"],"loki":"{app=\"web\"}"}'>{{.Scope}}</textarea>
+    <script id="scope-script">
+    (() => {
+      const lines = t => t.value.split("\n").map(s => s.trim()).filter(Boolean);
+      // A values textarea becomes chips plus an input; the textarea stays the submitted field.
+      function chips(ta) {
+        const box = document.createElement("div");
+        box.className = "chips";
+        ta.hidden = true;
+        ta.after(box);
+        const draw = () => {
+          // The old input must not commit again while it is being replaced.
+          if (box.lastChild) box.lastChild.onblur = null;
+          box.replaceChildren();
+          const opt = ta.closest(".scope-row")?.querySelector("select")?.selectedOptions[0];
+          const enumVals = opt?.dataset.enum ? opt.dataset.enum.split("\n") : null;
+          for (const v of lines(ta)) {
+            const c = document.createElement("span");
+            c.className = "chip";
+            c.textContent = v + " ";
+            const x = document.createElement("button");
+            x.type = "button";
+            x.textContent = "×";
+            x.setAttribute("aria-label", "Remove " + v);
+            x.onclick = () => { ta.value = lines(ta).filter(o => o !== v).join("\n"); changed(); };
+            c.append(x);
+            box.append(c);
+          }
+          let input;
+          if (enumVals) {
+            input = document.createElement("select");
+            input.append(new Option("Add a value", ""), ...enumVals.filter(v => !lines(ta).includes(v)).map(v => new Option(v, v)));
+            input.onchange = () => add(input.value, true);
+          } else {
+            input = document.createElement("input");
+            input.placeholder = "Add a value, then Enter";
+            input.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); add(input.value, true); } };
+            // Leaving the input keeps what was typed, and lets the focus go where it was headed.
+            input.onblur = () => { if (input.value.trim()) add(input.value, false); };
+          }
+          input.setAttribute("aria-label", "Add a value");
+          box.append(input);
+          return input;
+        };
+        const add = (v, refocus) => {
+          v = v.trim();
+          if (v && !lines(ta).includes(v)) ta.value = lines(ta).concat(v).join("\n");
+          const input = changed();
+          if (refocus) input.focus();
+        };
+        const changed = () => { const input = draw(); label(ta.closest(".srv")); return input; };
+        ta.redraw = draw;
+        draw();
+      }
+      // Each tool says whether the server's rows limit it, as the server would decide.
+      function label(srv) {
+        if (!srv) return;
+        const rows = [...srv.querySelectorAll(".scope-row")]
+          .filter(r => r.querySelector("select").value && lines(r.querySelector("textarea")).length)
+          .map(r => r.querySelector("select").value);
+        for (const t of srv.querySelectorAll(".tool-row")) {
+          const by = t.dataset.args.split(" ").filter(a => a && rows.includes(a));
+          t.querySelector(".limit").textContent = !rows.length ? "" : by.length ? "limited: " + by.join(", ") : "not limited by scope";
+        }
+      }
+      for (const ta of document.querySelectorAll("textarea.vals")) chips(ta);
+      for (const srv of document.querySelectorAll(".srv")) {
+        const rows = srv.querySelectorAll(".scope-row");
+        const button = srv.querySelector(".add-row");
+        if (!button || !rows.length) continue;
+        const blank = rows[rows.length - 1].cloneNode(true);
+        blank.querySelector(".chips")?.remove();
+        const wire = row => {
+          const sel = row.querySelector("select");
+          sel.onchange = () => { row.querySelector("textarea").redraw(); label(srv); };
+        };
+        rows.forEach(wire);
+        button.hidden = false;
+        button.onclick = () => {
+          const row = blank.cloneNode(true);
+          button.before(row);
+          chips(row.querySelector("textarea"));
+          wire(row);
+          row.querySelector("select").focus();
+        };
+      }
+    })();
+    </script>
 {{end}}
 
 {{define "token_edit"}}{{template "top" (page "Edit token" .Email "tokens")}}

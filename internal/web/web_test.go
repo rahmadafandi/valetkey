@@ -198,13 +198,13 @@ func TestTokens(t *testing.T) {
 	if code, body := e.get(t, "/tokens", true); code != 200 || !strings.Contains(body, "No tokens yet. Create one below when a bot needs to reach valetkey.") || !strings.Contains(body, `value="jenkins_deploy"`) {
 		t.Errorf("empty page: %d", code)
 	}
-	good := url.Values{"name": {"atlas"}, "tools": {"loki_query", "jenkins_deploy"}, "scope": {`{"fake":"x"}`}, "expiry": {"30"}}
+	good := url.Values{"name": {"atlas"}, "tools": {"loki_query", "jenkins_deploy"}, "scope.fake": {"x"}, "expiry": {"30"}}
 	if code, _ := e.post(t, "/tokens", good, "https://evil.example"); code != http.StatusForbidden {
 		t.Errorf("foreign Origin: %d", code)
 	}
 	for name, form := range map[string]url.Values{
 		"unknown tool": {"name": {"x"}, "tools": {"rm_rf"}, "expiry": {"30"}},
-		"bad scope":    {"name": {"x"}, "tools": {"loki_query"}, "scope": {`{"jenkin":"x"}`}, "expiry": {"30"}},
+		"bad scope":    {"name": {"x"}, "tools": {"loki_query"}, "scope.jenkin": {"x"}, "expiry": {"30"}},
 		"bad expiry":   {"name": {"x"}, "tools": {"loki_query"}, "expiry": {"365"}},
 		"no tools":     {"name": {"x"}, "expiry": {"30"}},
 		"negative":     {"name": {"x"}, "tools": {"loki_query"}, "expiry": {"30"}, "max_writes": {"-1"}},
@@ -248,15 +248,15 @@ func TestTokens(t *testing.T) {
 	list, _ := e.as.Store.ListPersonalTokens(ctx, e.user.ID)
 	list = slices.DeleteFunc(list, func(p store.PersonalToken) bool { return p.Name != "atlas" })
 	edit := "/tokens/" + list[0].ID
-	if code, body := e.get(t, edit+"/edit", true); code != 200 || !strings.Contains(body, `value="atlas"`) || !strings.Contains(body, `value="20"`) || !strings.Contains(body, "fake") {
+	if code, body := e.get(t, edit+"/edit", true); code != 200 || !strings.Contains(body, `value="atlas"`) || !strings.Contains(body, `value="20"`) || !strings.Contains(body, `name="scope.fake" rows="2" placeholder="">x</textarea>`) {
 		t.Errorf("edit page: %d\n%s", code, body)
 	}
-	narrower := url.Values{"name": {"atlas-ro"}, "tools": {"loki_query"}, "scope": {`{}`}, "max_writes": {"3"}, "dry_run": {"on"}}
+	narrower := url.Values{"name": {"atlas-ro"}, "tools": {"loki_query"}, "max_writes": {"3"}, "dry_run": {"on"}}
 	if code, _ := e.post(t, edit, narrower, "https://evil.example"); code != http.StatusForbidden {
 		t.Errorf("edit foreign Origin: %d", code)
 	}
 	for name, form := range map[string]url.Values{
-		"bad scope":    {"name": {"x"}, "tools": {"loki_query"}, "scope": {`{"jenkin":"x"}`}},
+		"bad scope":    {"name": {"x"}, "tools": {"loki_query"}, "scope.jenkin": {"x"}},
 		"unknown tool": {"name": {"x"}, "tools": {"rm_rf"}},
 		"no tools":     {"name": {"x"}},
 		"too many":     {"name": {"x"}, "tools": {"loki_query"}, "max_writes": {"1001"}},
@@ -464,7 +464,7 @@ func (p proxiedInt) Tools() []tools.Tool {
 func TestTokenFormListsTheUsersOwnMCPTools(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
-	const sentence = "valetkey limits which of these tools a token may call, not what they touch."
+	const sentence = "a call is only allowed when its argument is one of the values you list"
 	if _, body := e.get(t, "/tokens", true); strings.Contains(body, "From your MCP servers") {
 		t.Error("the group shows for a user without MCP servers")
 	}

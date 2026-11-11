@@ -148,7 +148,7 @@ func TestEndToEnd(t *testing.T) {
 	// 7. A personal access token created on /tokens sees only its tools and acts
 	// as its owner (with the Jenkins credentials connected above) within its scope.
 	req, _ = http.NewRequest("POST", pub+"/tokens", strings.NewReader(url.Values{
-		"name": {"atlas"}, "tools": {"jenkins_builds"}, "scope": {`{"jenkins":"app"}`}, "expiry": {"7"},
+		"name": {"atlas"}, "tools": {"jenkins_builds"}, "scope.jenkins": {"app"}, "expiry": {"7"},
 	}.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Origin", pub)

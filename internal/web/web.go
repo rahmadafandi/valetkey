@@ -32,6 +32,7 @@ var templatesHTML string
 
 var tmpl = template.Must(template.New("").Funcs(template.FuncMap{
 	"list": func(v ...string) []string { return v },
+	"join": strings.Join,
 	"head": func() template.HTML { return ui.Head },
 	// outcomeLabel turns a stored outcome into the words a page shows.
 	"outcomeLabel": func(o string) string { return strings.ReplaceAll(o, "_", " ") },
@@ -228,6 +229,8 @@ type toolRow struct {
 	Name, Description string
 	Destructive       bool
 	Checked           bool
+	Args              []string // a server tool's scalar arguments, by dotted path
+	Limit             string   // how the form's scope rows limit a server tool
 }
 
 var expiries = map[string]time.Duration{"7": 7 * 24 * time.Hour, "30": 30 * 24 * time.Hour, "90": 90 * 24 * time.Hour, "0": 0}
@@ -239,7 +242,7 @@ func (h *Web) toolRows(ctx context.Context, u store.User, checked []string) (nat
 		var out []toolRow
 		for _, in := range ints {
 			for _, t := range in.Tools() {
-				out = append(out, toolRow{t.Name, t.Description, t.Destructive, slices.Contains(checked, t.Name)})
+				out = append(out, toolRow{Name: t.Name, Description: t.Description, Destructive: t.Destructive, Checked: slices.Contains(checked, t.Name)})
 			}
 		}
 		return out
@@ -264,20 +267,17 @@ func (h *Web) tokens(w http.ResponseWriter, r *http.Request) {
 }
 
 // renderTokens shows the user's tokens and the create form; form carries a
-// rejected submission back (Name, Scope, Expiry, Tools, Error).
+// rejected submission back (Name, ScopeIn, Expiry, Tools, Error).
 func (h *Web) renderTokens(w http.ResponseWriter, r *http.Request, u store.User, form map[string]any, status int) {
 	list, err := h.Auth.Store.ListPersonalTokens(r.Context(), u.ID)
 	if err != nil {
 		h.fail(w, err)
 		return
 	}
-	checked, _ := form["Tools"].([]string)
-	native, proxied, err := h.toolRows(r.Context(), u, checked)
-	if err != nil {
-		h.fail(w, err)
+	if !h.scopeForm(w, r, u, form) {
 		return
 	}
-	form["Tokens"], form["ToolRows"], form["ProxiedRows"], form["Email"] = list, native, proxied, u.Email
+	form["Tokens"], form["Email"] = list, u.Email
 	if form["Expiry"] == nil {
 		form["Expiry"] = "30"
 	}
@@ -328,12 +328,40 @@ func (h *Web) createToken(w http.ResponseWriter, r *http.Request) {
 	render(w, http.StatusOK, "token_created", map[string]any{"Name": name, "Token": token, "MCPURL": h.PublicURL + "/mcp", "Email": u.Email})
 }
 
+func (h *Web) userServers(ctx context.Context, u store.User) ([]tools.Integration, error) {
+	if h.UserTools == nil {
+		return nil, nil
+	}
+	return h.UserTools(ctx, u.ID)
+}
+
+// scopeForm puts the tool checkboxes and the scope fields into form; form's
+// Tools are the checked tools and its ScopeIn the scope to show. It writes the
+// failure itself.
+func (h *Web) scopeForm(w http.ResponseWriter, r *http.Request, u store.User, form map[string]any) bool {
+	checked, _ := form["Tools"].([]string)
+	native, _, err := h.toolRows(r.Context(), u, checked)
+	if err != nil {
+		h.fail(w, err)
+		return false
+	}
+	servers, err := h.userServers(r.Context(), u)
+	if err != nil {
+		h.fail(w, err)
+		return false
+	}
+	in, _ := form["ScopeIn"].(scopeInput)
+	form["ToolRows"], form["Scope"] = native, in.view(h.Integrations, servers, checked)
+	return true
+}
+
 // readTokenForm reads the fields the create and edit forms share. form echoes
 // them back to the page; problem, when set, says why they cannot be used.
 func (h *Web) readTokenForm(r *http.Request, u store.User) (n auth.NewToken, form map[string]any, problem string, err error) {
+	in := inputFromForm(r.PostForm)
 	n = auth.NewToken{Name: strings.TrimSpace(r.PostForm.Get("name")), Tools: r.PostForm["tools"],
-		Scope: []byte(strings.TrimSpace(r.PostForm.Get("scope"))), MaxWritesPerHour: 20, DryRun: r.PostForm.Get("dry_run") == "on"}
-	form = map[string]any{"Name": n.Name, "Scope": string(n.Scope), "Tools": n.Tools, "DryRun": n.DryRun, "MaxWrites": r.PostForm.Get("max_writes")}
+		MaxWritesPerHour: 20, DryRun: r.PostForm.Get("dry_run") == "on"}
+	form = map[string]any{"Name": n.Name, "ScopeIn": in, "Tools": n.Tools, "DryRun": n.DryRun, "MaxWrites": r.PostForm.Get("max_writes")}
 	if v := strings.TrimSpace(r.PostForm.Get("max_writes")); v != "" {
 		m, err := strconv.Atoi(v)
 		if err != nil || m < 0 || m > 1000 {
@@ -353,6 +381,16 @@ func (h *Web) readTokenForm(r *http.Request, u store.User) (n auth.NewToken, for
 		if !known[t] {
 			return n, form, "Unknown tool " + t + ".", nil
 		}
+	}
+	servers, err := h.userServers(r.Context(), u)
+	if err != nil {
+		return n, form, "", err
+	}
+	if err := in.ownServers(servers); err != nil {
+		return n, form, err.Error(), nil
+	}
+	if n.Scope, err = in.stored(); err != nil {
+		return n, form, err.Error(), nil
 	}
 	return n, form, "", nil
 }
@@ -374,19 +412,16 @@ func (h *Web) editToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t := list[i]
-	h.renderEdit(w, r, u, t.ID, map[string]any{"Name": t.Name, "Scope": string(t.Scope), "Tools": t.Tools,
+	h.renderEdit(w, r, u, t.ID, map[string]any{"Name": t.Name, "ScopeIn": inputFromStored(t.Scope), "Tools": t.Tools,
 		"DryRun": t.DryRun, "MaxWrites": strconv.Itoa(t.MaxWritesPerHour)}, http.StatusOK)
 }
 
 // renderEdit shows the edit form; form carries the token's fields and Error.
 func (h *Web) renderEdit(w http.ResponseWriter, r *http.Request, u store.User, id string, form map[string]any, status int) {
-	checked, _ := form["Tools"].([]string)
-	native, proxied, err := h.toolRows(r.Context(), u, checked)
-	if err != nil {
-		h.fail(w, err)
+	if !h.scopeForm(w, r, u, form) {
 		return
 	}
-	form["ID"], form["ToolRows"], form["ProxiedRows"], form["Email"] = id, native, proxied, u.Email
+	form["ID"], form["Email"] = id, u.Email
 	render(w, status, "token_edit", form)
 }
 
