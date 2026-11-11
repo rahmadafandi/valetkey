@@ -148,7 +148,7 @@
     <li>
       <span class="what"><strong>{{.Name}}</strong><br><span class="meta" title="Dates and times are UTC">{{len .Tools}} tool{{if ne (len .Tools) 1}}s{{end}} · created {{.CreatedAt.UTC.Format "2006-01-02"}}
       · {{if .LastUsedAt}}last used {{.LastUsedAt.UTC.Format "2006-01-02 15:04"}} UTC{{else}}never used{{end}}
-      · {{if expired .ExpiresAt}}<strong class="error">expired {{.ExpiresAt.UTC.Format "2006-01-02"}}</strong>{{else if .ExpiresAt}}expires {{.ExpiresAt.UTC.Format "2006-01-02"}}{{else}}no expiry{{end}}
+      · {{if expired .ExpiresAt}}<strong class="error">expired {{.ExpiresAt.UTC.Format "2006-01-02"}}</strong>{{else if .ExpiresAt}}expires {{.ExpiresAt.UTC.Format "2006-01-02"}}{{$d := daysLeft .ExpiresAt}}{{if ge $d 0}} <strong class="error">({{if eq $d 0}}in less than a day{{else if eq $d 1}}in 1 day{{else}}in {{$d}} days{{end}}, renew it under Edit)</strong>{{end}}{{else}}no expiry{{end}}
       · {{if .DryRun}}dry run · {{end}}{{if .MaxWritesPerHour}}{{.MaxWritesPerHour}} writes/hour{{else}}no write limit{{end}}</span></span>
       <a class="btn small" href="/tokens/{{.ID}}/edit" aria-label="{{if expired .ExpiresAt}}Renew or edit{{else}}Edit{{end}} {{.Name}}">{{if expired .ExpiresAt}}Renew{{else}}Edit{{end}}</a>
       <a class="btn small" href="/tokens/{{.ID}}/duplicate#new-h" aria-label="Duplicate {{.Name}}">Duplicate</a>
@@ -379,7 +379,7 @@
     <div><label for="f-tool">Tool</label><input id="f-tool" name="tool" value="{{.Filter.Tool}}" autocomplete="off" class="mono"></div>
     <div><label for="f-outcome">Outcome</label><select id="f-outcome" name="outcome">
       <option value="">Any</option>
-      {{range $o := (list "ok" "error" "refused" "dry_run")}}<option value="{{$o}}" {{if eq $o $.Filter.Outcome}}selected{{end}}>{{outcomeLabel $o}}</option>{{end}}
+      {{range $o := (list "ok" "error" "refused" "dry_run" "pending")}}<option value="{{$o}}" {{if eq $o $.Filter.Outcome}}selected{{end}}>{{outcomeLabel $o}}</option>{{end}}
     </select></div>
     {{if .Admin}}<div><label for="f-user">User email</label><input id="f-user" name="user" type="email" value="{{.Filter.Email}}" autocomplete="off"></div>{{end}}
     <button class="btn" type="submit">Filter</button>

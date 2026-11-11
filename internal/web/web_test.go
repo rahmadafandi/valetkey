@@ -356,6 +356,18 @@ func TestRenewAndDuplicateToken(t *testing.T) {
 	}
 }
 
+func TestTokenRowWarnsBeforeExpiry(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	soon, later := time.Now().Add(50*time.Hour), time.Now().Add(20*24*time.Hour)
+	e.as.Store.CreatePersonalToken(ctx, store.PersonalToken{UserID: e.user.ID, Name: "soon", Tools: []string{"loki_query"}, Scope: []byte(`{}`), ExpiresAt: &soon}, []byte("h-soon"))
+	e.as.Store.CreatePersonalToken(ctx, store.PersonalToken{UserID: e.user.ID, Name: "later", Tools: []string{"loki_query"}, Scope: []byte(`{}`), ExpiresAt: &later}, []byte("h-later"))
+	_, body := e.get(t, "/tokens", true)
+	if n := strings.Count(body, "renew it under Edit"); n != 1 || !strings.Contains(body, "(in 2 days, renew it under Edit)") {
+		t.Errorf("want one warning, for the token expiring in 2 days; got %d\n%s", n, body)
+	}
+}
+
 func TestConnectSignInAndExchange(t *testing.T) {
 	e := newEnv(t)
 	if _, body := e.get(t, "/connect/fake", true); !strings.Contains(body, `href="https://idp.test/start?x=1&amp;y=2"`) {

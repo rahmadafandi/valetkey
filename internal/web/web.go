@@ -37,6 +37,18 @@ var tmpl = template.Must(template.New("").Funcs(template.FuncMap{
 	// outcomeLabel turns a stored outcome into the words a page shows.
 	"outcomeLabel": func(o string) string { return strings.ReplaceAll(o, "_", " ") },
 	"expired":      func(t *time.Time) bool { return t != nil && !t.After(time.Now()) },
+	// daysLeft is the whole days until a token expires when that is under a
+	// week, so the list can warn its owner; -1 otherwise.
+	"daysLeft": func(t *time.Time) int {
+		if t == nil {
+			return -1
+		}
+		left := time.Until(*t)
+		if left <= 0 || left >= 7*24*time.Hour {
+			return -1
+		}
+		return int(left / (24 * time.Hour))
+	},
 	// page carries what the shared header needs; here marks the current nav item.
 	"page": func(title, email, here string) map[string]string {
 		return map[string]string{"Title": title, "Email": email, "Here": here}
