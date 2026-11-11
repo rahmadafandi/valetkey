@@ -202,3 +202,33 @@ func TestDeleteUserCascadesUpstreams(t *testing.T) {
 		t.Fatalf("b lost data: %+v", ts)
 	}
 }
+
+func TestApproveRevokesTokenTools(t *testing.T) {
+	s := OpenTest(t)
+	a := mkUser(t, s, "a@example.com")
+	b := mkUser(t, s, "b@example.com")
+	srv := mkUpstream(t, s, a.ID, "srv")
+	s.ApproveTools(ctx, a.ID, srv.ID, []UpstreamTool{{Name: "a", InputSchema: "{}"}, {Name: "b", InputSchema: "{}"}})
+	mine, err := s.CreatePersonalToken(ctx, PersonalToken{UserID: a.ID, Name: "bot", Tools: []string{"srv__a", "srv__b"}, Scope: []byte("{}")}, []byte("h1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	theirs, err := s.CreatePersonalToken(ctx, PersonalToken{UserID: b.ID, Name: "bot", Tools: []string{"srv__a"}, Scope: []byte("{}")}, []byte("h2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	revoke := []TokenTool{{TokenID: mine, Tool: "srv__a"}, {TokenID: theirs, Tool: "srv__a"}}
+	if err := s.ApproveTools(ctx, a.ID, srv.ID, []UpstreamTool{{Name: "a", InputSchema: `{"type":"object"}`}, {Name: "b", InputSchema: "{}"}}, revoke...); err != nil {
+		t.Fatal(err)
+	}
+	tools := func(userID string) string {
+		ts, _ := s.ListPersonalTokens(ctx, userID)
+		return fmt.Sprint(ts[0].Tools)
+	}
+	if got := tools(a.ID); got != "[srv__b]" {
+		t.Errorf("own token: %s", got)
+	}
+	if got := tools(b.ID); got != "[srv__a]" {
+		t.Errorf("another user's token was touched: %s", got)
+	}
+}

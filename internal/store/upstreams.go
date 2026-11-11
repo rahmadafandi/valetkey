@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"slices"
 	"time"
 
 	"github.com/uptrace/bun"
@@ -111,8 +112,13 @@ func (s *Store) DeleteUpstream(ctx context.Context, userID, id string) error {
 	})
 }
 
-// ApproveTools replaces the upstream's approved set with tools.
-func (s *Store) ApproveTools(ctx context.Context, userID, upstreamID string, tools []UpstreamTool) error {
+// TokenTool names one tool granted to one personal access token.
+type TokenTool struct{ TokenID, Tool string }
+
+// ApproveTools replaces the upstream's approved set with tools and, in the same
+// transaction, takes each revoke tool away from its token. Only the user's own
+// tokens are touched.
+func (s *Store) ApproveTools(ctx context.Context, userID, upstreamID string, tools []UpstreamTool, revoke ...TokenTool) error {
 	return s.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
 		if err := ownsUpstream(ctx, tx, userID, upstreamID); err != nil {
 			return err
@@ -131,8 +137,28 @@ func (s *Store) ApproveTools(ctx context.Context, userID, upstreamID string, too
 				return err
 			}
 		}
-		_, err := tx.NewUpdate().Model((*Upstream)(nil)).Set("tools_approved_at = ?", t).Where("id = ?", upstreamID).Exec(ctx)
-		return err
+		if _, err := tx.NewUpdate().Model((*Upstream)(nil)).Set("tools_approved_at = ?", t).Where("id = ?", upstreamID).Exec(ctx); err != nil {
+			return err
+		}
+		drop := map[string][]string{}
+		for _, r := range revoke {
+			drop[r.TokenID] = append(drop[r.TokenID], r.Tool)
+		}
+		for id, gone := range drop {
+			var tk PersonalToken
+			err := tx.NewSelect().Model(&tk).Where("id = ? AND user_id = ?", id, userID).Scan(ctx)
+			if errors.Is(err, sql.ErrNoRows) {
+				continue
+			}
+			if err != nil {
+				return err
+			}
+			tk.Tools = slices.DeleteFunc(tk.Tools, func(name string) bool { return slices.Contains(gone, name) })
+			if _, err := tx.NewUpdate().Model(&tk).Column("tools").Where("id = ? AND user_id = ?", id, userID).Exec(ctx); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
