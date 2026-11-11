@@ -2,12 +2,14 @@ package web
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -138,6 +140,10 @@ func (h *Web) addUpstream(w http.ResponseWriter, r *http.Request) {
 	}
 	if !upstreamNameRE.MatchString(name) {
 		reject("The name needs 1 to 24 lowercase letters, digits or dashes, starting with a letter or digit.")
+		return
+	}
+	if slices.Contains(tools.ReservedKeys, name) {
+		reject(name + " is a built-in name in token scopes. Pick another name.")
 		return
 	}
 	if _, ok := authLabels[kind]; !ok {
@@ -365,9 +371,17 @@ func (h *Web) approveUpstream(w http.ResponseWriter, r *http.Request) {
 		h.renderReview(w, r, u, up, cands, skipped, "The server changed its tools while you were reviewing. Check the list again.", http.StatusConflict)
 		return
 	}
-	if err := h.Auth.Store.ApproveTools(r.Context(), u.ID, up.ID, proxy.Snapshot(cands)); err != nil {
+	_, revoke, err := h.escaping(r.Context(), u, up, cands)
+	if err != nil {
 		h.fail(w, err)
 		return
+	}
+	if err := h.Auth.Store.ApproveTools(r.Context(), u.ID, up.ID, proxy.Snapshot(cands), revoke...); err != nil {
+		h.fail(w, err)
+		return
+	}
+	if len(revoke) > 0 {
+		h.Log.Info("token tools revoked", "user", u.Email, "upstream", up.ID, "revoked", revoke)
 	}
 	h.Log.Info("upstream tools approved", "user", u.Email, "upstream", up.ID, "tools", len(cands))
 	http.Redirect(w, r, "/upstreams/"+up.ID, http.StatusSeeOther)
@@ -437,6 +451,63 @@ type reviewRow struct {
 	SchemaText string
 	Added      bool
 	Changed    string
+	LosesLimit []lostLimit // tokens whose scope would stop limiting this tool
+}
+
+// lostLimit is a token whose scope limits a tool by arguments a new version of it lacks.
+type lostLimit struct {
+	Token, Tool, Paths string
+}
+
+// escaping finds, for approving cands, the granted tools that a token's scope
+// limits today but would no longer limit, because their new schema lacks every
+// argument the scope names. Approval revokes those grants, so a schema change
+// never quietly lifts a token's limit.
+func (h *Web) escaping(ctx context.Context, u store.User, up store.Upstream, cands []proxy.Candidate) (map[string][]lostLimit, []store.TokenTool, error) {
+	if up.ToolsApprovedAt == nil {
+		return nil, nil, nil
+	}
+	approved, err := h.Auth.Store.ApprovedTools(ctx, u.ID, up.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	before := map[string]map[string]any{}
+	for _, t := range approved {
+		var schema map[string]any
+		json.Unmarshal([]byte(t.InputSchema), &schema)
+		before[t.Name] = schema
+	}
+	tokens, err := h.Auth.Store.ListPersonalTokens(ctx, u.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	lost := map[string][]lostLimit{}
+	var revoke []store.TokenTool
+	for _, c := range cands {
+		old, ok := before[c.Name]
+		if !ok {
+			continue
+		}
+		var now map[string]any
+		json.Unmarshal(c.Schema, &now)
+		for _, tk := range tokens {
+			if !slices.Contains(tk.Tools, c.Prefixed) {
+				continue
+			}
+			scope, err := tools.ParseScope(h.Integrations, tk.Scope)
+			if err != nil {
+				continue
+			}
+			if paths := scope.LosesLimit(up.Name, old, now); paths != nil {
+				lost[c.Prefixed] = append(lost[c.Prefixed], lostLimit{Token: tk.Name, Tool: c.Prefixed, Paths: strings.Join(paths, ", ")})
+				revoke = append(revoke, store.TokenTool{TokenID: tk.ID, Tool: c.Prefixed})
+			}
+		}
+	}
+	for _, l := range lost {
+		slices.SortFunc(l, func(a, b lostLimit) int { return strings.Compare(a.Token, b.Token) })
+	}
+	return lost, revoke, nil
 }
 
 // renderReview lists the fetched tools. Once the user has approved a set, it
@@ -483,13 +554,18 @@ func (h *Web) renderReview(w http.ResponseWriter, r *http.Request, u store.User,
 		}
 		changed[c.Name] = strings.Join(parts, ", ")
 	}
+	escapes, _, err := h.escaping(r.Context(), u, up, cands)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
 	rows := make([]reviewRow, len(cands))
 	for i, c := range cands {
 		var pretty bytes.Buffer
 		if json.Indent(&pretty, c.Schema, "", "  ") != nil {
 			pretty.Write(c.Schema)
 		}
-		rows[i] = reviewRow{Candidate: c, SchemaText: pretty.String(), Added: added[c.Name], Changed: changed[c.Name]}
+		rows[i] = reviewRow{Candidate: c, SchemaText: pretty.String(), Added: added[c.Name], Changed: changed[c.Name], LosesLimit: escapes[c.Prefixed]}
 	}
 	data["Tools"] = rows
 	render(w, status, "review", data)

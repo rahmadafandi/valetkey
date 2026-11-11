@@ -277,6 +277,9 @@ func TestAddUpstreamValidation(t *testing.T) {
 			t.Errorf("%s: %d", name, code)
 		}
 	}
+	if code, body := e.post(t, "/upstreams", url.Values{"name": {"loki"}, "url": {f.URL}, "auth": {"none"}}, e.url); code != 400 || !strings.Contains(body, "loki is a built-in name") {
+		t.Errorf("reserved name: %d\n%s", code, body)
+	}
 	for i := 1; i < store.MaxUpstreams; i++ {
 		if _, err := e.as.Store.CreateUpstream(ctx, store.Upstream{UserID: e.user.ID, Name: fmt.Sprintf("u%d", i), URL: f.URL, Auth: "none"}); err != nil {
 			t.Fatal(err)
@@ -722,5 +725,44 @@ func TestCallbackErrorIsNotEchoed(t *testing.T) {
 		if resp.StatusCode != 400 || !strings.Contains(body, want) || strings.Contains(body, "made-up") || strings.Contains(body, code+".") {
 			t.Errorf("%s: %d\n%s", code, resp.StatusCode, body)
 		}
+	}
+}
+
+func TestReviewRevokesToolsThatLoseTheirLimit(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	f := newMCPFake(t, &mcpFake{})
+	withArg := func(arg string) *mcp.Tool {
+		tl := tool("q", "Queries.", true)
+		tl.InputSchema = map[string]any{"type": "object", "properties": map[string]any{arg: map[string]any{"type": "integer"}}}
+		return tl
+	}
+	f.set(withArg("database_id"), tool("other", "Other.", true))
+	id, body := e.addNone(t, "srv", f.URL)
+	e.do(t, "POST", "/upstreams/"+id+"/approve", url.Values{"digest": {digestOf(t, body)}}, e.cookie)
+	if _, err := e.as.CreatePersonalToken(ctx, e.user.ID, auth.NewToken{Name: "bot", Tools: []string{"srv__q", "srv__other"}, Scope: []byte(`{"srv":{"database_id":[5]}}`), TTL: time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.as.CreatePersonalToken(ctx, e.user.ID, auth.NewToken{Name: "free", Tools: []string{"srv__q"}, TTL: time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+
+	f.set(withArg("db_id"), tool("other", "Other.", true))
+	_, body = e.do(t, "POST", "/upstreams/"+id+"/refresh", nil, e.cookie)
+	want := "Token <strong>bot</strong> limits <code>srv__q</code> by <code>database_id</code>, which this tool no longer has. Approving removes the tool from these tokens."
+	if !strings.Contains(body, want) {
+		t.Fatalf("review misses %q:\n%s", want, body)
+	}
+	if strings.Contains(body, "<strong>free</strong> limits") {
+		t.Error("a token without scope is named")
+	}
+	e.do(t, "POST", "/upstreams/"+id+"/approve", url.Values{"digest": {digestOf(t, body)}}, e.cookie)
+	tokens, _ := e.as.Store.ListPersonalTokens(ctx, e.user.ID)
+	got := map[string]string{}
+	for _, tk := range tokens {
+		got[tk.Name] = strings.Join(tk.Tools, ",")
+	}
+	if got["bot"] != "srv__other" || got["free"] != "srv__q" {
+		t.Errorf("after approval: %v", got)
 	}
 }
