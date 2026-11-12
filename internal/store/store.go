@@ -323,7 +323,8 @@ func (s *Store) UsePersonalToken(ctx context.Context, hash []byte) (PersonalToke
 	at := now()
 	err := s.db.NewSelect().Model(&t).
 		Where("token_hash = ? AND (expires_at IS NULL OR expires_at > ?)", hash, at).Scan(ctx)
-	if err == nil {
+	// last_used_at is shown to the day, so one write a minute is plenty.
+	if err == nil && (t.LastUsedAt == nil || at.Sub(*t.LastUsedAt) >= time.Minute) {
 		_, err = s.db.NewUpdate().Model((*PersonalToken)(nil)).Set("last_used_at = ?", at).Where("id = ?", t.ID).Exec(ctx)
 		t.LastUsedAt = &at
 	}
