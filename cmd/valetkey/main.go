@@ -70,11 +70,12 @@ func run(log *slog.Logger) error {
 		return err
 	}
 	defer st.Close()
-	h, err := buildHandler(cfg, st, ep, log)
+	h, px, err := buildHandler(cfg, st, ep, log)
 	if err != nil {
 		return err
 	}
 	go cleanup(ctx, st, cfg.AuditRetention, log)
+	go drift(ctx, px)
 
 	srv := &http.Server{Addr: cfg.Addr, Handler: h, ReadHeaderTimeout: 10 * time.Second}
 	go func() {
@@ -109,19 +110,33 @@ func cleanup(ctx context.Context, st *store.Store, retention time.Duration, log 
 	}
 }
 
-func buildHandler(cfg config.Config, st *store.Store, idp oauth2.Endpoint, log *slog.Logger) (http.Handler, error) {
+// drift looks every ten minutes for upstreams due their hourly comparison.
+func drift(ctx context.Context, px *proxy.Proxy) {
+	t := time.NewTicker(10 * time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			px.CheckDrift(ctx, time.Hour)
+		}
+	}
+}
+
+func buildHandler(cfg config.Config, st *store.Store, idp oauth2.Endpoint, log *slog.Logger) (http.Handler, *proxy.Proxy, error) {
 	v, err := vault.New(cfg.VaultKey)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	cr := creds.Store{DB: st, Vault: v, Log: log}
 	ints, err := integrations(cfg)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	catalog, err := web.LoadCatalog(cfg.CatalogFile)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	as := &auth.Server{

@@ -66,7 +66,7 @@ func TestEndToEnd(t *testing.T) {
 		Upstreams:   map[string]config.Upstream{"jenkins": {URL: jenkins.URL}},
 		CatalogFile: filepath.Join(dir, "catalog.json"),
 	}
-	h, err := buildHandler(cfg, st, oauth2.Endpoint{}, slog.New(slog.DiscardHandler))
+	h, _, err := buildHandler(cfg, st, oauth2.Endpoint{}, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -228,7 +228,7 @@ func TestProxiedToolEndToEnd(t *testing.T) {
 		AccessTTL: time.Hour, RefreshTTL: time.Hour, SessionTTL: time.Hour, Upstreams: map[string]config.Upstream{},
 		UpstreamAllowHosts: []string{"127.0.0.1"}, CatalogFile: filepath.Join(t.TempDir(), "none.json"),
 	}
-	h, err := buildHandler(cfg, st, oauth2.Endpoint{}, slog.New(slog.DiscardHandler))
+	h, _, err := buildHandler(cfg, st, oauth2.Endpoint{}, slog.New(slog.DiscardHandler))
 	if err != nil {
 		t.Fatal(err)
 	}

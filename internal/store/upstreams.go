@@ -29,6 +29,8 @@ type Upstream struct {
 	Auth            string     `bun:"auth"`
 	CreatedAt       time.Time  `bun:"created_at"`
 	ToolsApprovedAt *time.Time `bun:"tools_approved_at"` // nil until the user approves a snapshot
+	ToolsChangedAt  *time.Time `bun:"tools_changed_at"`  // set while the server's tools differ from the approved snapshot
+	DriftCheckedAt  *time.Time `bun:"drift_checked_at"`  // last background comparison with the server
 }
 
 // UpstreamTool is one tool definition the user approved for an upstream.
@@ -137,7 +139,7 @@ func (s *Store) ApproveTools(ctx context.Context, userID, upstreamID string, too
 				return err
 			}
 		}
-		if _, err := tx.NewUpdate().Model((*Upstream)(nil)).Set("tools_approved_at = ?", t).Where("id = ?", upstreamID).Exec(ctx); err != nil {
+		if _, err := tx.NewUpdate().Model((*Upstream)(nil)).Set("tools_approved_at = ?", t).Set("tools_changed_at = NULL").Where("id = ?", upstreamID).Exec(ctx); err != nil {
 			return err
 		}
 		drop := map[string][]string{}
@@ -221,4 +223,38 @@ func (s *Store) UserTools(ctx context.Context, userID string) ([]UserTool, error
 		}
 	}
 	return out, nil
+}
+
+// ClaimDriftChecks returns the upstreams with approved tools that nobody has
+// compared with their server since before, and marks them checked now. The
+// mark is taken per row, so of several instances only one gets each upstream.
+func (s *Store) ClaimDriftChecks(ctx context.Context, before time.Time) ([]Upstream, error) {
+	const due = "tools_approved_at IS NOT NULL AND (drift_checked_at IS NULL OR drift_checked_at < ?)"
+	var us, mine []Upstream
+	if err := s.db.NewSelect().Model(&us).Where(due, before).Scan(ctx); err != nil {
+		return nil, err
+	}
+	for _, u := range us {
+		res, err := s.db.NewUpdate().Model((*Upstream)(nil)).Set("drift_checked_at = ?", now()).Where("id = ?", u.ID).Where(due, before).Exec(ctx)
+		if err != nil {
+			return mine, err
+		}
+		if n, _ := res.RowsAffected(); n == 1 {
+			mine = append(mine, u)
+		}
+	}
+	return mine, nil
+}
+
+// SetToolsChanged records whether the server's tools differ from the approved
+// snapshot. The time of the first difference is kept until it goes away.
+func (s *Store) SetToolsChanged(ctx context.Context, id string, changed bool) error {
+	q := s.db.NewUpdate().Model((*Upstream)(nil)).Where("id = ?", id)
+	if changed {
+		q = q.Set("tools_changed_at = ?", now()).Where("tools_changed_at IS NULL")
+	} else {
+		q = q.Set("tools_changed_at = NULL")
+	}
+	_, err := q.Exec(ctx)
+	return err
 }
