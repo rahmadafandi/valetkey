@@ -91,7 +91,8 @@
   <a class="spare" href="/tokens"><strong>Spare keys for bots</strong>
     <span>A token is a smaller ring for a script: only the tools you pick, a cap on changes an hour, or a dry run.</span></a>
   <a href="/upstreams"><strong>Your MCP servers</strong>
-    <span class="muted">Put remote MCP servers you use on the same ring, behind the same rules.</span></a>
+    <span class="muted">Put remote MCP servers you use on the same ring, behind the same rules.</span>
+    {{if .ToolsChanged}}<strong class="error">{{.ToolsChanged}} server{{if ne .ToolsChanged 1}}s{{end}} changed tools you approved. Review.</strong>{{end}}</a>
 </div>
 
 {{if .Catalog}}
@@ -411,7 +412,7 @@
   {{range .Upstreams}}
     <li>
       <span class="what"><strong>{{.Name}}</strong><br><code>{{.URL}}</code><br><span class="meta" title="Dates and times are UTC">{{.AuthLabel}} ·
-        {{if .ToolsApprovedAt}}{{.Approved}} tool{{if ne .Approved 1}}s{{end}} approved {{.ToolsApprovedAt.UTC.Format "2006-01-02"}}{{else}}no tools approved yet{{end}}</span></span>
+        {{if .ToolsApprovedAt}}{{.Approved}} tool{{if ne .Approved 1}}s{{end}} approved {{.ToolsApprovedAt.UTC.Format "2006-01-02"}}{{else}}no tools approved yet{{end}}{{if .ToolsChangedAt}} · <strong class="error">its tools changed {{.ToolsChangedAt.UTC.Format "2006-01-02"}}, review them</strong>{{end}}</span></span>
       <a class="btn small" href="/upstreams/{{.ID}}" aria-label="Manage {{.Name}}">Manage</a>
     </li>
   {{else}}
@@ -484,6 +485,7 @@
   <h2 id="tools-h">Approved tools</h2>
   {{if and .Error (eq .Up.Auth "none")}}<p class="error" role="alert">{{.Error}}</p>{{end}}
   {{if .Tools}}
+  {{if .Up.ToolsChangedAt}}<p class="error" role="alert">The server changed or dropped a tool you approved (seen {{.Up.ToolsChangedAt.UTC.Format "2006-01-02"}}). Calls may fail until you check for changes and approve the new list.</p>{{end}}
   <p class="muted">Your agents see these, exactly as you approved them, until you approve a new list.</p>
   <ul class="rows">
   {{range .Tools}}

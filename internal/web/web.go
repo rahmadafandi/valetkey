@@ -132,8 +132,19 @@ func (h *Web) home(w http.ResponseWriter, r *http.Request) {
 		h.fail(w, err)
 		return
 	}
+	ups, err := h.Auth.Store.ListUpstreams(r.Context(), u.ID)
+	if err != nil {
+		h.fail(w, err)
+		return
+	}
+	changed := 0
+	for _, up := range ups {
+		if up.ToolsChangedAt != nil {
+			changed++
+		}
+	}
 	render(w, http.StatusOK, "home", map[string]any{
-		"Email": u.Email, "MCPURL": h.PublicURL + "/mcp", "Systems": rows, "Calls": calls, "Catalog": h.Catalog,
+		"Email": u.Email, "MCPURL": h.PublicURL + "/mcp", "Systems": rows, "Calls": calls, "Catalog": h.Catalog, "ToolsChanged": changed,
 	})
 }
 
