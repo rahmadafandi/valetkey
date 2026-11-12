@@ -161,6 +161,9 @@ func MigrationStatus(ctx context.Context, url string) (string, error) {
 
 func (s *Store) Close() { s.db.Close() }
 
+// Ping reports whether the database answers.
+func (s *Store) Ping(ctx context.Context) error { return s.db.PingContext(ctx) }
+
 func newID() string { return rand.Text() }
 
 // now is UTC so SQLite, which compares timestamps as text, orders them correctly.

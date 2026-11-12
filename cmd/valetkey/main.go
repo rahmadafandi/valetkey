@@ -142,8 +142,17 @@ func buildHandler(cfg config.Config, st *store.Store, idp oauth2.Endpoint, log *
 	mux.Handle("/mcp", tools.HTTPHandler(ints, px.Integrations, cr.Load, cfg.PublicURL, log, st, as.Verify, as.ResourceMetadataURL()))
 	(&web.Web{Auth: as, Creds: cr, Integrations: ints, UserTools: px.Integrations, Catalog: catalog, AdminEmails: cfg.AdminEmails, PublicURL: cfg.PublicURL, Log: log,
 		Proxy: px, Guard: guard}).Routes(mux)
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
-	return mux, nil
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
+		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
+		defer cancel()
+		if err := st.Ping(ctx); err != nil {
+			log.Error("healthz: database", "err", err)
+			http.Error(w, "database unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Write([]byte("ok"))
+	})
+	return mux, px, nil
 }
 
 // integrations builds the upstream integrations whose <SYSTEM>_URL is set.
