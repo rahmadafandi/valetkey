@@ -48,6 +48,11 @@ func (g *GitLab) Validate(ctx context.Context, c tools.Creds) error {
 		return errors.New("token is required")
 	}
 	_, err := g.do(ctx, c, http.MethodGet, "/user", nil, nil, 64<<10)
+	// A fine-grained token without "User: Read" is a real token that GitLab
+	// recognised; what it may reach shows on the first tool call.
+	if err != nil && strings.Contains(err.Error(), "insufficient_granular_scope") {
+		return nil
+	}
 	return err
 }
 

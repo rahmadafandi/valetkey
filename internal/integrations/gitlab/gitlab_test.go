@@ -45,6 +45,10 @@ type fake struct {
 func newFake(t *testing.T) *fake {
 	f := &fake{open: `[]`, mr7: mr(7, "opened", "fix/login", "main", head)}
 	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("PRIVATE-TOKEN") == "fine-grained" && r.URL.Path == "/api/v4/user" {
+			http.Error(w, `{"error":"insufficient_granular_scope","error_description":"requires [User: Read]"}`, http.StatusForbidden)
+			return
+		}
 		if r.Header.Get("PRIVATE-TOKEN") != "tok" {
 			http.Error(w, `{"message":"401 Unauthorized"}`, http.StatusUnauthorized)
 			return
@@ -115,6 +119,9 @@ func TestValidate(t *testing.T) {
 	}
 	if err := g.Validate(ctx, tools.Creds{"token": "nope"}); !errors.Is(err, upstream.ErrUnauthorized) {
 		t.Errorf("bad token: %v", err)
+	}
+	if err := g.Validate(ctx, tools.Creds{"token": "fine-grained"}); err != nil {
+		t.Errorf("fine-grained token without User: Read: %v", err)
 	}
 	if err := g.Validate(ctx, tools.Creds{}); err == nil {
 		t.Error("accepted an empty token")
