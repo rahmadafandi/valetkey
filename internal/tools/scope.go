@@ -46,7 +46,7 @@ type ServerRows map[string][]string
 
 // ReservedKeys are the scope keys of the built-in integrations, on or off. No
 // server of a user's own may take one of these names.
-var ReservedKeys = []string{"argocd", "bitbucket", "jenkins", "loki", "metrics", "notion"}
+var ReservedKeys = []string{"argocd", "bitbucket", "gitlab", "jenkins", "loki", "metrics", "notion"}
 
 // ParseScope reads a scope object against the enabled integrations. A key that
 // is not an integration's names one of the user's servers and holds an object

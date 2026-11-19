@@ -26,6 +26,7 @@ type familyText struct {
 
 var familyTexts = map[string]familyText{
 	"bitbucket": {Label: "Bitbucket repositories", Note: "Each one as workspace/repo.", Placeholder: "acme/web"},
+	"gitlab":    {Label: "GitLab projects", Note: "Each one as its full path, spelled as GitLab shows it.", Placeholder: "group/app"},
 	"jenkins":   {Label: "Jenkins jobs", Note: "Job paths, such as deploy-web or folder/deploy-web.", Placeholder: "deploy-web"},
 	"loki":      {Label: "Loki stream selectors", Note: "A query may only use the selectors listed here.", Placeholder: `{app="web"}`},
 	"metrics":   {Label: "Metrics selector", Note: "One selector. Every query must carry its labels.", Placeholder: `{namespace="web"}`, Single: true},

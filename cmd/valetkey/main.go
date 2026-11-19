@@ -20,6 +20,7 @@ import (
 	"github.com/rahmadafandi/valetkey/internal/creds"
 	"github.com/rahmadafandi/valetkey/internal/integrations/argocd"
 	"github.com/rahmadafandi/valetkey/internal/integrations/bitbucket"
+	"github.com/rahmadafandi/valetkey/internal/integrations/gitlab"
 	"github.com/rahmadafandi/valetkey/internal/integrations/jenkins"
 	"github.com/rahmadafandi/valetkey/internal/integrations/loki"
 	"github.com/rahmadafandi/valetkey/internal/integrations/metrics"
@@ -191,6 +192,9 @@ func integrations(cfg config.Config) ([]tools.Integration, error) {
 	}
 	if u, ok := cfg.Upstreams["bitbucket"]; ok {
 		ints = append(ints, bitbucket.New(u.URL, u.Insecure))
+	}
+	if u, ok := cfg.Upstreams["gitlab"]; ok {
+		ints = append(ints, gitlab.New(u.URL, u.Insecure))
 	}
 	if u, ok := cfg.Upstreams["notion"]; ok {
 		ints = append(ints, notion.New(u.URL, u.Insecure))
