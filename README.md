@@ -66,6 +66,7 @@ An upstream is on when its `<SYSTEM>_URL` is set. Each person then connects thei
 | Jenkins | `JENKINS_URL` | Base URL, for example `https://jenkins.example.com` |
 | Argo CD | `ARGOCD_URL` | Base URL, for example `https://argocd.example.com` |
 | Bitbucket Cloud | `BITBUCKET_URL` | API root, `https://api.bitbucket.org/2.0` |
+| GitLab | `GITLAB_URL` | Instance URL without `/api/v4`, for example `https://gitlab.com`. Needs GitLab 15.7 or later |
 | Loki | `LOKI_URL` | API base URL, see below |
 | Metrics | `METRICS_URL` | API base URL, see below |
 | Notion | `NOTION_URL` | API root, `https://api.notion.com/v1` |
@@ -95,7 +96,7 @@ Add a server with a name, its URL and a login kind:
 - **OAuth.** valetkey signs in to the server the way an MCP client does. It finds the server's authorization server from the `WWW-Authenticate` header of the 401 answer, or from the well-known address, and it needs `S256` in `code_challenge_methods_supported`, so it refuses a server without it. If the server offers dynamic client registration, valetkey registers itself. If not, the page asks for a client ID, and a secret if the client has one, and names the token endpoint's host, the only place the secret is sent. valetkey uses PKCE and sends `resource` with the authorization, token and refresh requests. It requests the scopes the server lists in its protected-resource metadata. To sign in again, use **Sign in again** on the server's page: the old login keeps working until the new one finishes.
 - **None.** For a server that needs no login.
 
-The name starts with a lowercase letter or digit, followed by up to 23 lowercase letters, digits or hyphens. It cannot be a built-in scope key (`argocd`, `bitbucket`, `jenkins`, `loki`, `metrics`, `notion`). Agents see each tool as `<server>__<tool>`, so a tool `search` on a server named `docs` appears as `docs__search`.
+The name starts with a lowercase letter or digit, followed by up to 23 lowercase letters, digits or hyphens. It cannot be a built-in scope key (`argocd`, `bitbucket`, `gitlab`, `jenkins`, `loki`, `metrics`, `notion`). Agents see each tool as `<server>__<tool>`, so a tool `search` on a server named `docs` appears as `docs__search`.
 
 ### Approving tools
 
@@ -162,6 +163,7 @@ The form stores the scope as a JSON object with these keys. Each of your own ser
 | Key | Value | Example | A call is refused when |
 |---|---|---|---|
 | `bitbucket` | One repository, `workspace/slug`, or a list | `"bitbucket": ["acme/web", "acme/api"]` | the `repo` argument is not listed |
+| `gitlab` | One project by its full path, or a list | `"gitlab": ["group/app", "group/team/api"]` | the `project` argument is not listed, compared exactly as written |
 | `jenkins` | A job path, or a list of them | `"jenkins": ["deploy-web", "folder/deploy-api"]` | the job in `jobURL` is not in the list |
 | `loki` | One stream selector, or a list | `"loki": ["{app=\"web\"}", "{app=\"api\"}"]` | a stream selector in the query is not listed, or the query has none |
 | `argocd` | An app name, or a list of them | `"argocd": ["web", "api"]` | the `app` argument is not in the list |
@@ -184,7 +186,7 @@ A built-in key must belong to an upstream you have turned on. If you later turn 
 
 ### Write limit and dry run
 
-The write limit counts a token's calls to tools that change things (`bitbucket_pr_create`, `bitbucket_pr_merge`, `bitbucket_pr_comment`, `jenkins_deploy`, `jenkins_rebuild`, `argocd_sync`, `notion_page_create`, `notion_page_append`) over the last hour. Calls that ended in `ok`, `error` or `dry_run` count, and so does a write that is still running (`pending` on the activity page). When the limit is reached, the next write is refused until older calls fall out of the hour. A limited write is stored as pending before it is counted, so the limit holds across several replicas on one database: of two parallel writes, the later always counts the earlier. Two writes racing on different replicas for the last place may both be refused. Within one replica, a token's limited writes run one at a time, and a write waits while an earlier one on the same token is still running. OAuth sessions have no write limit.
+The write limit counts a token's calls to tools that change things (`bitbucket_pr_create`, `bitbucket_pr_merge`, `bitbucket_pr_comment`, `gitlab_mr_create`, `gitlab_mr_merge`, `gitlab_mr_comment`, `jenkins_deploy`, `jenkins_rebuild`, `argocd_sync`, `notion_page_create`, `notion_page_append`) over the last hour. Calls that ended in `ok`, `error` or `dry_run` count, and so does a write that is still running (`pending` on the activity page). When the limit is reached, the next write is refused until older calls fall out of the hour. A limited write is stored as pending before it is counted, so the limit holds across several replicas on one database: of two parallel writes, the later always counts the earlier. Two writes racing on different replicas for the last place may both be refused. Within one replica, a token's limited writes run one at a time, and a write waits while an earlier one on the same token is still running. OAuth sessions have no write limit.
 
 A dry-run token goes through the scope and limit checks, then answers `dry-run: would call <tool> with <args>` without contacting the upstream. Read tools run as usual.
 
@@ -242,6 +244,7 @@ Names and defaults match [.env.example](.env.example).
 | `LOKI_URL`, `LOKI_INSECURE` | no | | Turns Loki on, `true` skips TLS verification |
 | `METRICS_URL`, `METRICS_INSECURE` | no | | Turns metrics on, `true` skips TLS verification |
 | `BITBUCKET_URL`, `BITBUCKET_INSECURE` | no | | Turns Bitbucket on, `true` skips TLS verification |
+| `GITLAB_URL`, `GITLAB_INSECURE` | no | | Turns GitLab on, `true` skips TLS verification |
 | `NOTION_URL`, `NOTION_INSECURE` | no | | Turns Notion on, `true` skips TLS verification |
 | `UPSTREAM_ALLOW_HOSTS` | no | | Exact host names of MCP servers that may use http and skip the address check, comma-separated |
 

@@ -11,7 +11,7 @@ valetkey sits between an AI agent and your ops tools. It acts with each person's
 ### What valetkey protects against
 
 - An agent reaching resources outside its token's scope. A token names the repositories, Jenkins jobs, Argo CD apps, log streams and metric labels it may touch. A call outside them is refused before it reaches the upstream.
-- Merging on stale state. `bitbucket_pr_merge` takes `expected_source_commit` and `argocd_sync` takes `expected_revision`. Both refuse when the upstream has moved, and `argocd_sync` then syncs exactly the commit it checked.
+- Merging on stale state. `bitbucket_pr_merge` and `gitlab_mr_merge` take `expected_source_commit` and `argocd_sync` takes `expected_revision`. All three refuse when the upstream has moved. `argocd_sync` then syncs exactly the commit it checked, and `gitlab_mr_merge` hands the commit to GitLab, which refuses the merge if the head changed in between.
 - Unbounded repeated writes. Each token has a write limit per hour, 20 by default.
 - Silent actions. Every call that reaches a tool, refused ones included, is written to the audit log and shown on `/activity`. A call to a tool outside a token's list is rejected by the MCP layer before valetkey's handler and is not logged.
 - An agent seeing a tool definition you did not approve. For MCP servers people add, `tools/list` shows the approved snapshot of each server's tools. A changed description or a new tool stays hidden until the person approves it, and approving stores the list that was shown.
